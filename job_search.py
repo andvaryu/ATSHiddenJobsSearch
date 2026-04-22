@@ -873,18 +873,39 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
 
     all_rows = [SHEET_HEADERS]
     row_meta = []
+    blank_row = [""] * NUM_COLS
+    first_section = True
 
     for sec in range(6):
         jobs = sections[sec]
-        if not jobs and sec == 0:
+        if not jobs:
             continue
+
+        # Add 2 blank spacer rows before every section except the first
+        if not first_section:
+            for _ in range(2):
+                all_rows.append(blank_row[:])
+                row_meta.append({"section": sec, "is_header": False,
+                                 "is_overflow": False, "is_spacer": True,
+                                 "sheet_row": len(all_rows) - 1})
+        first_section = False
+
         label, _ = SECTION_LABELS[sec]
         all_rows.append([label] + [""] * (NUM_COLS - 1))
-        row_meta.append({"section": sec, "is_header": True, "is_overflow": False})
+        row_meta.append({"section": sec, "is_header": True, "is_overflow": False,
+                         "is_spacer": False, "sheet_row": len(all_rows) - 1})
+
         for i, job in enumerate(jobs):
-            all_rows.append(job_to_row(job, sec, prev_user_data, today))
+            # Skip ghost rows — jobs with no title and no URL
+            if not job.get("title") and not job.get("url"):
+                continue
+            row = job_to_row(job, sec, prev_user_data, today)
+            row = ["TRUE" if v is True else "FALSE" if v is False else v for v in row]
+            all_rows.append(row)
             overflow = (sec != 5) and (i >= ROWS_VISIBLE)
-            row_meta.append({"section": sec, "is_header": False, "is_overflow": overflow})
+            row_meta.append({"section": sec, "is_header": False,
+                             "is_overflow": overflow, "is_spacer": False,
+                             "sheet_row": len(all_rows) - 1})
 
     try:
         service.spreadsheets().values().clear(
@@ -895,7 +916,10 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
             valueInputOption="USER_ENTERED",
             body={"values": all_rows}
         ).execute()
-        print(f"    📊 Wrote {len(all_rows)-1} rows")
+        print(f"    📊 Wrote {len(all_rows)-1} rows ({len(sections[0])} pinned, "
+              f"{len(sections[1])+len(sections[2])} new, "
+              f"{len(sections[3])} circulating, {len(sections[4])} possible, "
+              f"{len(sections[5])} applied)")
     except Exception as e:
         print(f"    ❌ Write error: {e}"); return
 
@@ -945,7 +969,7 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "fields": "pixelSize"
         }})
 
-    # Header row
+    # Header row (column header)
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1},
         "cell": {"userEnteredFormat": {
@@ -957,41 +981,77 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
         "fields": "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)"
     }})
 
-    # Pinned col (A) — green bg + checkbox
+    # Rotate text UP in narrow columns A and B header cells
+    for col_idx in [0, 1]:
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1,
+                      "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1},
+            "cell": {"userEnteredFormat": {
+                "textRotation": {"angle": 90}
+            }},
+            "fields": "userEnteredFormat.textRotation"
+        }})
+
+    # STEP 1: Clear all backgrounds on data rows first
+    batch.append({"repeatCell": {
+        "range": {"sheetId": gid, "startRowIndex": 1},
+        "cell": {"userEnteredFormat": {
+            "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}
+        }},
+        "fields": "userEnteredFormat.backgroundColor"
+    }})
+
+    # STEP 2: Apply column colors AFTER clearing (so they're not wiped)
+    # Pinned col (A) — green bg
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1,
                   "startColumnIndex": 0, "endColumnIndex": 1},
-        "cell": {
-            "userEnteredFormat": {
-                "backgroundColor": {"red": 0.88, "green": 0.96, "blue": 0.88}
-            },
-            "dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}
-        },
-        "fields": "userEnteredFormat.backgroundColor,dataValidation"
+        "cell": {"userEnteredFormat": {
+            "backgroundColor": {"red": 0.88, "green": 0.96, "blue": 0.88}
+        }},
+        "fields": "userEnteredFormat.backgroundColor"
     }})
 
-    # Reject col (B) — red bg + standard checkbox
+    # Reject col (B) — red bg
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1,
                   "startColumnIndex": 1, "endColumnIndex": 2},
-        "cell": {
-            "userEnteredFormat": {
-                "backgroundColor": {"red": 0.99, "green": 0.88, "blue": 0.88}
-            },
-            "dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}
-        },
-        "fields": "userEnteredFormat.backgroundColor,dataValidation"
+        "cell": {"userEnteredFormat": {
+            "backgroundColor": {"red": 0.99, "green": 0.88, "blue": 0.88}
+        }},
+        "fields": "userEnteredFormat.backgroundColor"
     }})
 
-    # Applied! col (J) — checkbox
-    batch.append({"repeatCell": {
-        "range": {"sheetId": gid, "startRowIndex": 1,
-                  "startColumnIndex": 9, "endColumnIndex": 10},
-        "cell": {"dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}},
-        "fields": "dataValidation"
-    }})
+    # STEP 3: Apply checkboxes and dropdowns only to actual data rows (skip section headers and spacers)
+    # Collect data row indices from row_meta
+    data_row_indices = [i + 1 for i, m in enumerate(row_meta)
+                        if not m["is_header"] and not m.get("is_spacer", False)]
 
-    # Stage col (M) — dropdown
+    # Apply checkboxes row by row to avoid hitting section header rows
+    for sr in data_row_indices:
+        # Pinned checkbox
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                      "startColumnIndex": 0, "endColumnIndex": 1},
+            "cell": {"dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}},
+            "fields": "dataValidation"
+        }})
+        # Reject checkbox
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                      "startColumnIndex": 1, "endColumnIndex": 2},
+            "cell": {"dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}},
+            "fields": "dataValidation"
+        }})
+        # Applied! checkbox
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                      "startColumnIndex": 9, "endColumnIndex": 10},
+            "cell": {"dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}},
+            "fields": "dataValidation"
+        }})
+
+    # Stage dropdown (col 12) — apply to all data rows in one call (dropdown in headers is harmless)
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1,
                   "startColumnIndex": 12, "endColumnIndex": 13},
@@ -1015,16 +1075,7 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "fields": "userEnteredFormat.wrapStrategy"
         }})
 
-    # Clear all backgrounds on data rows
-    batch.append({"repeatCell": {
-        "range": {"sheetId": gid, "startRowIndex": 1},
-        "cell": {"userEnteredFormat": {
-            "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}
-        }},
-        "fields": "userEnteredFormat.backgroundColor"
-    }})
-
-    # Section header colors — one row each
+    # Section header colors — exactly one row each, applied after background clear
     for i, meta in enumerate(row_meta):
         sr = i + 1
         if meta["is_header"]:
@@ -1052,11 +1103,15 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
                 "fields": "userEnteredFormat.backgroundColor"
             }})
 
-    # Build overflow ranges
+    # Build overflow ranges (skip spacer rows)
     overflow_ranges = []
     in_overflow, start_row = False, None
     for i, meta in enumerate(row_meta):
         sr = i + 1
+        if meta.get("is_spacer"):
+            if in_overflow:
+                overflow_ranges.append((start_row, sr)); in_overflow = False
+            continue
         if meta["is_overflow"] and not in_overflow:
             in_overflow = True; start_row = sr
         elif not meta["is_overflow"] and in_overflow:
@@ -1176,34 +1231,70 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
         save_rejected(name, new_rejected_urls)
         print(f"    🚫 {len(new_rejected_urls)} URLs added to reject list")
 
-    # Handle dropped jobs
     current_urls = {j["url"] for j in all_jobs}
     rejected     = load_rejected(name)
+
     for url, p in prev_user_data.items():
         if url in current_urls or url in rejected:
             continue
-        has_data = any(p.get(c, "").strip() for c in USER_COLS
-                       if c not in ("pinned", "reject", "applied_check"))
-        if has_data:
-            expired = {
-                "title": p.get("title",""), "company": p.get("company",""),
-                "url": url, "ats_site": p.get("ats_site",""),
-                "keywords": "", "snippet": "",
-                "salary": p.get("salary",""), "remote": p.get("remote",""),
-                "location": p.get("location",""), "date_posted": "",
-                "seen_before": True,
-                "first_seen_date": datetime.date.today() - datetime.timedelta(days=8),
-                "first_seen": p.get("first_seen",""),
-                "on_linkedin": False, "on_indeed": False, "on_glassdoor": False,
-                "unsyndicated": False, "relevance_score": 0,
-                "relevance_label": "🔵 Possible", "relevance_reasons": [],
+
+        is_pinned  = normalize_bool(p.get("pinned", ""))
+        is_applied = normalize_bool(p.get("applied_check", "")) or bool(p.get("date_applied","").strip())
+        has_data   = any(p.get(c, "").strip() for c in USER_COLS
+                         if c not in ("pinned", "reject", "applied_check"))
+
+        # Pinned checkbox alone is sufficient to preserve — no other data needed
+        # Applied jobs are always preserved
+        # Other jobs only preserved if they have user-entered data
+        if is_pinned or is_applied or has_data:
+            label = p.get("match", "🔵 Possible") or "🔵 Possible"
+            try:
+                fs = datetime.date.fromisoformat(p.get("first_seen", "")[:10])
+            except (ValueError, TypeError):
+                fs = datetime.date.today() - datetime.timedelta(days=8)
+
+            revived = {
+                "title":           p.get("title", ""),
+                "company":         p.get("company", ""),
+                "url":             url,
+                "ats_site":        p.get("ats_site", ""),
+                "keywords":        "",
+                "snippet":         "",
+                "salary":          p.get("salary", ""),
+                "remote":          p.get("remote", ""),
+                "location":        p.get("location", ""),
+                "date_posted":     "",
+                "seen_before":     True,
+                "first_seen_date": fs,
+                "first_seen":      p.get("first_seen", ""),
+                "on_linkedin":     False,
+                "on_indeed":       False,
+                "on_glassdoor":    False,
+                "unsyndicated":    is_pinned,  # Keep pinned in Sec 0
+                "relevance_score": float(p.get("relevance_score", 0) or 0),
+                "relevance_label": label,
+                "relevance_reasons": [],
             }
-            all_jobs.append(expired)
-            if not p.get("date_applied") and \
-               not normalize_bool(p.get("applied_check", "")):
+            all_jobs.append(revived)
+            # Mark expired if no user action taken
+            if not is_pinned and not is_applied and not p.get("date_applied","").strip():
                 prev_user_data[url]["stage"] = "Expired?"
 
-    rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data)
+    # Ensure no duplicate URLs
+    seen_urls = set()
+    deduped   = []
+    for job in all_jobs:
+        if job["url"] not in seen_urls:
+            seen_urls.add(job["url"])
+            deduped.append(job)
+
+    # Ensure all jobs have a valid relevance_label (prevents floating dots)
+    for job in deduped:
+        if not job.get("relevance_label"):
+            job["relevance_label"] = "🔵 Possible"
+
+    print(f"    📋 Writing {len(deduped)} jobs to sheet")
+    rewrite_sheet(service, sheet_id, name, deduped, prev_user_data)
 
 
 # =============================================================================
@@ -1439,7 +1530,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.3.1")
+    print(f"\n🔍 ATS Job Search v4.3.3")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
@@ -1490,7 +1581,7 @@ def main():
         open_mkt = [j for j in sg_new if not j["unsyndicated"]]
 
         if SHEETS_ENABLED:
-            update_sheet(name, results + possible, prev_user_data, new_rejected_urls)
+            update_sheet(name, results, prev_user_data, new_rejected_urls)
 
         html = build_email_html(profile, gems, open_mkt, returning)
         send_email(profile["email"], name, html)
