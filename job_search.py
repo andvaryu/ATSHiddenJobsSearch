@@ -12,7 +12,7 @@ Changes from v4.2.3:
 - Stage: combined dropdown (New/Reviewing/Applied/Phone Screen/Interview/Final Round/Offer/Rejected/Pass)
 - Interview Stage column removed
 - · barrier column removed
-- Email: ATS site label removed åfrom cards, job titles underlined as links
+- Email: ATS site label removed from cards, job titles underlined as links
 - PythonAnywhere trigger endpoint for manual re-run from sheet
 - Reject memory: rejected_urls_NAME.csv, 90-day TTL
 """
@@ -203,6 +203,10 @@ STAGE_OPTIONS = [
     "Interview", "Final Round", "Offer", "Rejected", "Pass"
 ]
 
+REMOTE_OPTIONS = [
+    "🏠 Remote", "🏢 In-person", "🏠🏢 Hybrid", "🏠 In-range"
+]
+
 # =============================================================================
 # 🔧 COLUMN DEFINITIONS
 # =============================================================================
@@ -217,38 +221,40 @@ COL = {
     "remote":          6,   # G — Script
     "location":        7,   # H — Script
     "url":             8,   # I — Script
-    "applied_check":   9,   # J — User (checkbox)
-    "date_posted":    10,   # K — Script
-    "date_applied":   11,   # L — User/Script (auto-filled)
-    "stage":          12,   # M — User (dropdown)
-    "notes":          13,   # N — User (text wrap)
-    "date_followed":  14,   # O — User
-    "contact":        15,   # P — User
-    "ats_site":       16,   # Q — Script
-    "syndication":    17,   # R — Script
-    "resume_version": 18,   # S — User
-    "cover_letter":   19,   # T — User (text wrap)
-    "first_seen":     20,   # U — Script
-    "section":        21,   # V — Script
+    "hidden":          9,   # J — Script (Y if not syndicated)
+    "applied_check":  10,   # K — User (checkbox)
+    "date_posted":    11,   # L — Script
+    "date_applied":   12,   # M — User/Script (auto-filled)
+    "stage":          13,   # N — User (dropdown)
+    "notes":          14,   # O — User (text wrap)
+    "date_followed":  15,   # P — User
+    "contact":        16,   # Q — User
+    "ats_site":       17,   # R — Script
+    "syndication":    18,   # S — Script
+    "resume_version": 19,   # T — User
+    "cover_letter":   20,   # U — User (text wrap)
+    "first_seen":     21,   # V — Script
+    "section":        22,   # W — Script
 }
-NUM_COLS  = 22
+NUM_COLS  = 23
 USER_COLS = ["pinned", "reject", "applied_check", "date_applied", "stage",
              "notes", "date_followed", "contact", "resume_version", "cover_letter"]
 
 SHEET_HEADERS = [
     "Pin", "Reject", "Title", "Company", "Match", "Salary",
-    "Remote", "Location", "URL", "Applied!", "Date Posted", "Date Applied",
-    "Stage", "Notes", "Date Followed Up", "Contact", "ATS Site", "Syndication",
-    "Resume Version", "Cover Letter Notes", "First Seen", "Section",
+    "Remote", "Location", "URL", "Hidden?", "Applied!", "Date Posted",
+    "Date Applied", "Stage", "Notes", "Date Followed Up", "Contact",
+    "ATS Site", "Syndication", "Resume Version", "Cover Letter Notes",
+    "First Seen", "Section",
 ]
 
 SECTION_LABELS = {
-    0: ("📌 Pinned",            "Jobs you've starred — stay here until unpinned"),
-    1: ("🟢 Hidden Gems",       "New · Not on LinkedIn/Indeed/Glassdoor · Fresh within 7 days"),
-    2: ("🔵 Open Market Picks", "New · On major boards · Ranked by relevance · Fresh within 7 days"),
-    3: ("🟡 Still Circulating", "Older than 7 days or seen in a previous run"),
-    4: ("⚪ Other Matches",     "Possible matches below Strong/Good threshold · Sheet only"),
-    5: ("✅ Applied & Waiting", "You've marked as applied"),
+    0: ("📌 Pinned",              "Jobs you've starred — stay here until unpinned"),
+    1: ("💎 Hidden Gems",         "New · Not on LinkedIn/Indeed/Glassdoor · Fresh within 7 days"),
+    2: ("🌐 Open Market Picks",   "New · On major boards · Ranked by relevance · Fresh within 7 days"),
+    3: ("♻️ Still Circulating",   "Older than 7 days or seen in a previous run"),
+    4: ("🤷 Other Matches",       "Possible matches below Strong/Good threshold · Sheet only"),
+    5: ("✅ Applied & Waiting",   "You've marked as applied"),
 }
 
 SECTION_COLORS = {
@@ -1037,6 +1043,18 @@ def read_existing_rows(service, sheet_id):
     return existing
 
 
+def remote_with_icon(val):
+    """Map remote value to icon-prefixed display string."""
+    mapping = {
+        "Remote":     "🏠 Remote",
+        "In-person":  "🏢 In-person",
+        "Hybrid":     "🏠🏢 Hybrid",
+        "In-range":   "🏠 In-range",
+        "In-Person":  "🏢 In-person",
+    }
+    return mapping.get(val, val or "🏢 In-person")
+
+
 def job_to_row(job, section_num, prev_user_data, today):
     row  = [""] * NUM_COLS
     url  = job.get("url", "")
@@ -1045,22 +1063,34 @@ def job_to_row(job, section_num, prev_user_data, today):
     row[COL["title"]]       = job.get("title", "")
     row[COL["company"]]     = job.get("company", "")
     row[COL["match"]]       = job.get("relevance_label", "")
-    row[COL["salary"]]      = job.get("salary", "") or "n/a"
-    row[COL["remote"]]      = job.get("remote", "") or "Unknown"
-    row[COL["location"]]    = job.get("location", "") or "unknown"
     row[COL["url"]]         = url
     row[COL["date_posted"]] = job.get("date_posted", "")
     row[COL["section"]]     = str(section_num)
     row[COL["ats_site"]]    = job.get("ats_site", "")
     row[COL["first_seen"]]  = job.get("first_seen", today)
 
+    # Salary — prefer job data, fall back to previously stored user data, then n/a
+    salary = job.get("salary", "") or prev.get("salary", "") or "n/a"
+    row[COL["salary"]] = salary
+
+    # Location — same preservation logic
+    location = job.get("location", "") or prev.get("location", "") or "unknown"
+    row[COL["location"]] = location
+
+    # Remote — with icon prefix
+    remote = job.get("remote", "") or prev.get("remote", "") or "In-person"
+    row[COL["remote"]] = remote_with_icon(remote)
+
+    # Hidden? — Y if not syndicated, N if on major boards
     flags = []
     if job.get("on_linkedin"):  flags.append("LinkedIn")
     if job.get("on_indeed"):    flags.append("Indeed")
     if job.get("on_glassdoor"): flags.append("Glassdoor")
-    row[COL["syndication"]] = ", ".join(flags) if flags else "Not syndicated"
+    syndication = ", ".join(flags) if flags else "Not syndicated"
+    row[COL["syndication"]] = syndication
+    row[COL["hidden"]]      = "Y" if not flags else "N"
 
-    # User columns
+    # User columns — preserve existing user data
     for col_name in USER_COLS:
         val = prev.get(col_name, "")
         if col_name in ("pinned", "reject", "applied_check"):
@@ -1179,49 +1209,56 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
 
 
 def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
+    """
+    Clean formatting rewrite v4.3.7:
+    - No row grouping (removed entirely)
+    - Strict ordering: clear → section headers → per-row A/B colors → checkboxes
+    - Green/red col A/B applied per data row (skips section headers)
+    - Grey italic for n/a and unknown values in salary/location cols
+    """
     batch = []
     gid   = 0
 
-    # Freeze header
+    # 1. Freeze header row
     batch.append({"updateSheetProperties": {
         "properties": {"sheetId": gid, "gridProperties": {"frozenRowCount": 1}},
         "fields": "gridProperties.frozenRowCount"
     }})
 
-    # Column widths
+    # 2. Column widths
     widths = {
-        0: 30,   # Pinned (checkbox — narrow)
-        1: 30,   # Reject (checkbox — narrow)
-        2: 220,  # Title (wider — was 190 before Reject col was added)
+        0: 30,   # Pin
+        1: 30,   # Reject
+        2: 220,  # Title
         3: 160,  # Company
         4: 50,   # Match
         5: 100,  # Salary
-        6: 72,   # Remote
+        6: 90,   # Remote
         7: 90,   # Location
         8: 100,  # URL
-        9: 55,   # Applied!
-        10: 90,  # Date Posted
-        11: 100, # Date Applied
-        12: 140, # Stage
-        13: 205, # Notes
-        14: 100, # Date Followed Up
-        15: 140, # Contact
-        16: 110, # ATS Site
-        17: 130, # Syndication
-        18: 120, # Resume Version
-        19: 200, # Cover Letter Notes
-        20: 90,  # First Seen
-        21: 50,  # Section
+        9: 40,   # Hidden?
+        10: 55,  # Applied!
+        11: 90,  # Date Posted
+        12: 100, # Date Applied
+        13: 140, # Stage
+        14: 205, # Notes
+        15: 100, # Date Followed Up
+        16: 140, # Contact
+        17: 110, # ATS Site
+        18: 130, # Syndication
+        19: 120, # Resume Version
+        20: 200, # Cover Letter Notes
+        21: 90,  # First Seen
+        22: 50,  # Section
     }
     for col_idx, px in widths.items():
         batch.append({"updateDimensionProperties": {
             "range": {"sheetId": gid, "dimension": "COLUMNS",
                       "startIndex": col_idx, "endIndex": col_idx + 1},
-            "properties": {"pixelSize": px},
-            "fields": "pixelSize"
+            "properties": {"pixelSize": px}, "fields": "pixelSize"
         }})
 
-    # Header row (column header)
+    # 3. Top header row — dark background, white bold text
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1},
         "cell": {"userEnteredFormat": {
@@ -1233,18 +1270,16 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
         "fields": "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)"
     }})
 
-    # Rotate text UP in narrow columns A and B header cells
+    # 4. Rotate text in cols A and B header
     for col_idx in [0, 1]:
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1,
                       "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1},
-            "cell": {"userEnteredFormat": {
-                "textRotation": {"angle": 90}
-            }},
+            "cell": {"userEnteredFormat": {"textRotation": {"angle": 90}}},
             "fields": "userEnteredFormat.textRotation"
         }})
 
-    # STEP 1: Clear all backgrounds on data rows first
+    # 5. Clear all data row backgrounds to white
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1},
         "cell": {"userEnteredFormat": {
@@ -1253,81 +1288,7 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
         "fields": "userEnteredFormat.backgroundColor"
     }})
 
-    # STEP 2: Apply column colors AFTER clearing (so they're not wiped)
-    # Pinned col (A) — green bg
-    batch.append({"repeatCell": {
-        "range": {"sheetId": gid, "startRowIndex": 1,
-                  "startColumnIndex": 0, "endColumnIndex": 1},
-        "cell": {"userEnteredFormat": {
-            "backgroundColor": {"red": 0.88, "green": 0.96, "blue": 0.88}
-        }},
-        "fields": "userEnteredFormat.backgroundColor"
-    }})
-
-    # Reject col (B) — red bg
-    batch.append({"repeatCell": {
-        "range": {"sheetId": gid, "startRowIndex": 1,
-                  "startColumnIndex": 1, "endColumnIndex": 2},
-        "cell": {"userEnteredFormat": {
-            "backgroundColor": {"red": 0.99, "green": 0.88, "blue": 0.88}
-        }},
-        "fields": "userEnteredFormat.backgroundColor"
-    }})
-
-    # STEP 3: Apply checkboxes and dropdowns only to actual data rows (skip section headers and spacers)
-    # Collect data row indices from row_meta
-    data_row_indices = [i + 1 for i, m in enumerate(row_meta)
-                        if not m["is_header"] and not m.get("is_spacer", False)]
-
-    # Apply checkboxes row by row to avoid hitting section header rows
-    for sr in data_row_indices:
-        # Pinned checkbox
-        batch.append({"repeatCell": {
-            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
-                      "startColumnIndex": 0, "endColumnIndex": 1},
-            "cell": {"dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}},
-            "fields": "dataValidation"
-        }})
-        # Reject checkbox
-        batch.append({"repeatCell": {
-            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
-                      "startColumnIndex": 1, "endColumnIndex": 2},
-            "cell": {"dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}},
-            "fields": "dataValidation"
-        }})
-        # Applied! checkbox
-        batch.append({"repeatCell": {
-            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
-                      "startColumnIndex": 9, "endColumnIndex": 10},
-            "cell": {"dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}},
-            "fields": "dataValidation"
-        }})
-
-    # Stage dropdown (col 12) — apply to all data rows in one call (dropdown in headers is harmless)
-    batch.append({"repeatCell": {
-        "range": {"sheetId": gid, "startRowIndex": 1,
-                  "startColumnIndex": 12, "endColumnIndex": 13},
-        "cell": {"dataValidation": {
-            "condition": {
-                "type": "ONE_OF_LIST",
-                "values": [{"userEnteredValue": s} for s in STAGE_OPTIONS]
-            },
-            "showCustomUi": True,
-            "strict": False
-        }},
-        "fields": "dataValidation"
-    }})
-
-    # Text wrap — Notes (col 13) and Cover Letter Notes (col 19)
-    for wrap_col in [13, 19]:
-        batch.append({"repeatCell": {
-            "range": {"sheetId": gid, "startRowIndex": 1,
-                      "startColumnIndex": wrap_col, "endColumnIndex": wrap_col + 1},
-            "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
-            "fields": "userEnteredFormat.wrapStrategy"
-        }})
-
-    # Section header colors — exactly one row each, applied after background clear
+    # 6. Section header colors — precisely one row each
     for i, meta in enumerate(row_meta):
         sr = i + 1
         if meta["is_header"]:
@@ -1338,7 +1299,8 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             g     = int(bg[2:4], 16) / 255
             b     = int(bg[4:6], 16) / 255
             batch.append({"repeatCell": {
-                "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1},
+                "range": {"sheetId": gid,
+                          "startRowIndex": sr, "endRowIndex": sr + 1},
                 "cell": {"userEnteredFormat": {
                     "backgroundColor": {"red": r, "green": g, "blue": b},
                     "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1},
@@ -1346,47 +1308,151 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
                 }},
                 "fields": "userEnteredFormat(backgroundColor,textFormat)"
             }})
-        elif meta["is_overflow"]:
-            batch.append({"repeatCell": {
-                "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1},
-                "cell": {"userEnteredFormat": {
-                    "backgroundColor": {"red": 0.97, "green": 0.97, "blue": 0.97}
-                }},
-                "fields": "userEnteredFormat.backgroundColor"
-            }})
 
-    # Build overflow ranges (skip spacer rows)
-    overflow_ranges = []
-    in_overflow, start_row = False, None
+    # 7. Per data-row: green col A, red col B, checkboxes
+    #    Applied row by row so section header rows are never touched
+    data_rows = [i + 1 for i, m in enumerate(row_meta)
+                 if not m["is_header"] and not m.get("is_spacer", False)]
+
+    for sr in data_rows:
+        # Green background col A
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                      "startColumnIndex": 0, "endColumnIndex": 1},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": {"red": 0.88, "green": 0.96, "blue": 0.88}
+            }},
+            "fields": "userEnteredFormat.backgroundColor"
+        }})
+        # Red background col B
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                      "startColumnIndex": 1, "endColumnIndex": 2},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": {"red": 0.99, "green": 0.88, "blue": 0.88}
+            }},
+            "fields": "userEnteredFormat.backgroundColor"
+        }})
+        # Pin checkbox col A
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                      "startColumnIndex": 0, "endColumnIndex": 1},
+            "cell": {"dataValidation": {
+                "condition": {"type": "BOOLEAN"}, "showCustomUi": True
+            }},
+            "fields": "dataValidation"
+        }})
+        # Reject checkbox col B
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                      "startColumnIndex": 1, "endColumnIndex": 2},
+            "cell": {"dataValidation": {
+                "condition": {"type": "BOOLEAN"}, "showCustomUi": True
+            }},
+            "fields": "dataValidation"
+        }})
+        # Applied! checkbox col K (10)
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                      "startColumnIndex": 10, "endColumnIndex": 11},
+            "cell": {"dataValidation": {
+                "condition": {"type": "BOOLEAN"}, "showCustomUi": True
+            }},
+            "fields": "dataValidation"
+        }})
+
+    # 8. Stage dropdown col N (13) — whole column
+    batch.append({"repeatCell": {
+        "range": {"sheetId": gid, "startRowIndex": 1,
+                  "startColumnIndex": COL["stage"], "endColumnIndex": COL["stage"] + 1},
+        "cell": {"dataValidation": {
+            "condition": {
+                "type": "ONE_OF_LIST",
+                "values": [{"userEnteredValue": s} for s in STAGE_OPTIONS]
+            },
+            "showCustomUi": True, "strict": False
+        }},
+        "fields": "dataValidation"
+    }})
+
+    # Remote dropdown col G (6)
+    batch.append({"repeatCell": {
+        "range": {"sheetId": gid, "startRowIndex": 1,
+                  "startColumnIndex": COL["remote"], "endColumnIndex": COL["remote"] + 1},
+        "cell": {"dataValidation": {
+            "condition": {
+                "type": "ONE_OF_LIST",
+                "values": [{"userEnteredValue": s} for s in REMOTE_OPTIONS]
+            },
+            "showCustomUi": True, "strict": False
+        }},
+        "fields": "dataValidation"
+    }})
+
+    # 9. Text wrap — Notes (col 14) and Cover Letter Notes (col 20)
+    for wrap_col in [COL["notes"], COL["cover_letter"]]:
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": 1,
+                      "startColumnIndex": wrap_col, "endColumnIndex": wrap_col + 1},
+            "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+            "fields": "userEnteredFormat.wrapStrategy"
+        }})
+
+    # 10. Grey italic for n/a and unknown — handled in step 11 after black font reset
+    grey_italic = {
+        "foregroundColor": {"red": 0.6, "green": 0.6, "blue": 0.6},
+        "italic": True,
+        "fontSize": 9
+    }
+
+    # 11. Final pass: force black non-bold font on text columns for data rows
+    #     Prevents white text bleed-over from section header formatting
+    text_cols = [
+        COL["title"], COL["company"], COL["match"], COL["remote"],
+        COL["location"], COL["date_posted"], COL["date_applied"],
+        COL["date_followed"], COL["contact"], COL["ats_site"],
+        COL["syndication"], COL["hidden"], COL["first_seen"],
+    ]
+    black_normal = {
+        "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0},
+        "bold": False,
+        "italic": False,
+        "fontSize": 10
+    }
+    for col_idx in text_cols:
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": 1,
+                      "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1},
+            "cell": {"userEnteredFormat": {"textFormat": black_normal}},
+            "fields": "userEnteredFormat.textFormat"
+        }})
+    # Re-apply grey italic AFTER the black reset (so n/a and unknown stay grey)
     for i, meta in enumerate(row_meta):
         sr = i + 1
-        if meta.get("is_spacer"):
-            if in_overflow:
-                overflow_ranges.append((start_row, sr)); in_overflow = False
+        if meta["is_header"] or meta.get("is_spacer"):
             continue
-        if meta["is_overflow"] and not in_overflow:
-            in_overflow = True; start_row = sr
-        elif not meta["is_overflow"] and in_overflow:
-            overflow_ranges.append((start_row, sr)); in_overflow = False
-    if in_overflow:
-        overflow_ranges.append((start_row, len(row_meta) + 1))
+        row = all_rows[sr] if sr < len(all_rows) else []
+        salary_val   = row[COL["salary"]]   if len(row) > COL["salary"]   else ""
+        location_val = row[COL["location"]] if len(row) > COL["location"] else ""
+        if str(salary_val) in ("n/a", ""):
+            batch.append({"repeatCell": {
+                "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                          "startColumnIndex": COL["salary"],
+                          "endColumnIndex": COL["salary"] + 1},
+                "cell": {"userEnteredFormat": {"textFormat": grey_italic}},
+                "fields": "userEnteredFormat.textFormat"
+            }})
+        if str(location_val) in ("unknown", ""):
+            batch.append({"repeatCell": {
+                "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
+                          "startColumnIndex": COL["location"],
+                          "endColumnIndex": COL["location"] + 1},
+                "cell": {"userEnteredFormat": {"textFormat": grey_italic}},
+                "fields": "userEnteredFormat.textFormat"
+            }})
 
-    # Delete existing groups (all depths)
-    for depth in range(5, 0, -1):
-        try:
-            service.spreadsheets().batchUpdate(
-                spreadsheetId=sheet_id,
-                body={"requests": [{"deleteDimensionGroup": {
-                    "range": {"sheetId": gid, "dimension": "ROWS",
-                              "startIndex": 1, "endIndex": 10000},
-                    "depth": depth
-                }}]}
-            ).execute()
-        except Exception:
-            pass
-
-    # Split batch into chunks of 50 to avoid 500 errors on large sheets
-    def run_batch_chunks(requests, chunk_size=50):
+    # Execute in chunks of 50
+    def run_chunks(requests, chunk_size=50):
         for i in range(0, len(requests), chunk_size):
             chunk = requests[i:i + chunk_size]
             try:
@@ -1396,33 +1462,8 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             except Exception as e:
                 print(f"    ⚠️  Formatting chunk error: {e}")
 
-    run_batch_chunks(batch)
-
-    # Add + collapse groups one at a time
-    for s, e in overflow_ranges:
-        try:
-            service.spreadsheets().batchUpdate(
-                spreadsheetId=sheet_id,
-                body={"requests": [{"addDimensionGroup": {
-                    "range": {"sheetId": gid, "dimension": "ROWS",
-                              "startIndex": s, "endIndex": e}
-                }}]}
-            ).execute()
-            service.spreadsheets().batchUpdate(
-                spreadsheetId=sheet_id,
-                body={"requests": [{"updateDimensionGroup": {
-                    "dimensionGroup": {
-                        "range": {"sheetId": gid, "dimension": "ROWS",
-                                  "startIndex": s, "endIndex": e},
-                        "depth": 1, "collapsed": True
-                    },
-                    "fields": "collapsed"
-                }}]}
-            ).execute()
-        except Exception as ex:
-            print(f"    ⚠️  Group error ({s}:{e}): {ex}")
-
-    print(f"    🎨 Formatting applied ({len(overflow_ranges)} groups)")
+    run_chunks(batch)
+    print(f"    🎨 Formatting applied")
     create_filter_views(service, sheet_id, gid)
 
 
@@ -1566,12 +1607,16 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
             if not is_pinned and not is_applied:
                 prev_user_data[url]["stage"] = "Expired?"
 
-    # Deduplicate and validate
+    # Deduplicate and validate — exclude rejected jobs
     seen_urls = set()
     deduped   = []
     for job in all_jobs:
         url = job.get("url", "")
         if not url or not url.startswith("http") or url in seen_urls:
+            continue
+        # Drop rejected jobs — they should not appear in sheet
+        if url in rejected:
+            seen_urls.add(url)
             continue
         seen_urls.add(url)
         if not job.get("relevance_label"):
@@ -1823,7 +1868,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.3.6")
+    print(f"\n🔍 ATS Job Search v4.3.8")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
