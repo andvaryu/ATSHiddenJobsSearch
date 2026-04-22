@@ -12,7 +12,7 @@ Changes from v4.2.3:
 - Stage: combined dropdown (New/Reviewing/Applied/Phone Screen/Interview/Final Round/Offer/Rejected/Pass)
 - Interview Stage column removed
 - · barrier column removed
-- Email: ATS site label removed from cards, job titles underlined as links
+- Email: ATS site label removed åfrom cards, job titles underlined as links
 - PythonAnywhere trigger endpoint for manual re-run from sheet
 - Reject memory: rejected_urls_NAME.csv, 90-day TTL
 """
@@ -82,13 +82,26 @@ TRIGGER_SECRET    = os.getenv("TRIGGER_SECRET", "")
 # ✏️  EXCLUSION FILTERS
 # =============================================================================
 
+# =============================================================================
+# ✏️  EXCLUSION FILTERS
+# =============================================================================
+
+# Jobs dropped if ANY of these appear in the TITLE (case-insensitive)
 EXCLUDE_TITLE_KEYWORDS = [
     "nursing", "nurse", "software engineer", "developer", "recruiter",
+    "sales management", "security engineer", "event coordinator",
+    "government affairs", "revenue integrity", "payment accuracy",
 ]
+
+# Jobs dropped if ANY of these appear in the SNIPPET
 EXCLUDE_SNIPPET_KEYWORDS = [
     "entry level", "internship", "intern ", " intern,", "new grad",
     "recent grad", "data scientist",
 ]
+
+# Debug mode — writes debug_filtered_NAME.csv with every dropped job and reason
+# Set to False for normal production runs
+DEBUG_FILTERS = True
 
 # =============================================================================
 # ✏️  PROFILES
@@ -463,32 +476,98 @@ def save_rejected(name, new_urls):
 # 🔧 PRE-FILTERS
 # =============================================================================
 
-def passes_exclusion_filter(job):
+# =============================================================================
+# 🔧 PRE-FILTERS
+# =============================================================================
+
+# Known wrong-city signals — explicit non-remote locations not in any ok_cities list
+# Only used when strict location checking is needed
+WRONG_CITY_SIGNALS = [
+    "new york", "chicago", "boston", "austin", "denver", "atlanta",
+    "dallas", "houston", "miami", "philadelphia", "phoenix", "portland",
+    "san diego", "minneapolis", "detroit", "nashville", "charlotte",
+    "pittsburgh", "cleveland", "cincinnati",
+]
+
+
+def check_exclusion_filter(job):
+    """Returns (passes: bool, reason: str)"""
     title   = job.get("title", "").lower()
     snippet = job.get("snippet", "").lower()
     for kw in EXCLUDE_TITLE_KEYWORDS:
         if kw.lower() in title:
-            return False
+            return False, f"title contains '{kw}'"
     for kw in EXCLUDE_SNIPPET_KEYWORDS:
         if kw.lower() in snippet:
-            return False
-    return True
+            return False, f"snippet contains '{kw}'"
+    return True, ""
 
 
-def passes_location_filter(job, profile):
+def check_location_filter(job, profile):
+    """
+    Returns (passes: bool, reason: str)
+    LENIENT: only drop if a clearly wrong city is explicitly mentioned
+    AND there is no remote signal. If location is ambiguous/missing → keep.
+    """
     ok_cities = profile.get("ok_cities", [])
     if not ok_cities:
-        return True
+        return True, ""   # David — no city filter
+
     text = (job.get("title", "") + " " +
             job.get("snippet", "") + " " +
             job.get("location", "")).lower()
+
     remote_signals = ["remote", "work from home", "wfh", "fully remote",
-                      "100% remote", "anywhere", "distributed"]
+                      "100% remote", "anywhere", "distributed", "hybrid"]
+
+    # Keep if any remote signal present
     if any(sig in text for sig in remote_signals):
-        return True
+        return True, ""
+
+    # Keep if an ok city is mentioned
     if any(city in text for city in ok_cities):
-        return True
-    return False
+        return True, ""
+
+    # Drop ONLY if a clearly wrong city is explicitly mentioned
+    for wrong_city in WRONG_CITY_SIGNALS:
+        if wrong_city in text:
+            return False, f"explicit wrong city: '{wrong_city}'"
+
+    # Location ambiguous or not mentioned — keep (benefit of the doubt)
+    return True, ""
+
+
+def passes_exclusion_filter(job):
+    passed, _ = check_exclusion_filter(job)
+    return passed
+
+
+def passes_location_filter(job, profile):
+    passed, _ = check_location_filter(job, profile)
+    return passed
+
+
+def write_debug_filtered(name, dropped_jobs):
+    """Write CSV of dropped jobs with reasons for filter debugging."""
+    if not DEBUG_FILTERS or not dropped_jobs:
+        return
+    path = HISTORY_DIR / f"debug_filtered_{name.lower()}.csv"
+    fields = ["title", "company", "url", "ats_site", "location", "snippet_preview",
+              "filter_reason"]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for job, reason in dropped_jobs:
+            writer.writerow({
+                "title":            job.get("title", "")[:80],
+                "company":          job.get("company", ""),
+                "url":              job.get("url", ""),
+                "ats_site":         job.get("ats_site", ""),
+                "location":         job.get("location", ""),
+                "snippet_preview":  job.get("snippet", "")[:120],
+                "filter_reason":    reason,
+            })
+    print(f"    🔍 Debug: {len(dropped_jobs)} filtered jobs written to {path.name}")
 
 
 # =============================================================================
@@ -851,10 +930,25 @@ def search_for_profile(profile):
                     "relevance_reasons": [],
                 })
 
-    raw_count = len(results)
-    results   = [j for j in results if passes_exclusion_filter(j)]
-    results   = [j for j in results if passes_location_filter(j, profile)]
-    print(f"    {raw_count} found → {len(results)} after filters")
+    raw_count   = len(results)
+    kept        = []
+    dropped     = []   # (job, reason) tuples for debug
+
+    for job in results:
+        excl_pass, excl_reason = check_exclusion_filter(job)
+        if not excl_pass:
+            dropped.append((job, excl_reason)); continue
+        loc_pass, loc_reason = check_location_filter(job, profile)
+        if not loc_pass:
+            dropped.append((job, loc_reason)); continue
+        kept.append(job)
+
+    results = kept
+    print(f"    {raw_count} found → {len(results)} after filters "
+          f"({len(dropped)} dropped)")
+
+    if DEBUG_FILTERS:
+        write_debug_filtered(name, dropped)
 
     for job in results:
         score_job(job, profile)
@@ -951,9 +1045,9 @@ def job_to_row(job, section_num, prev_user_data, today):
     row[COL["title"]]       = job.get("title", "")
     row[COL["company"]]     = job.get("company", "")
     row[COL["match"]]       = job.get("relevance_label", "")
-    row[COL["salary"]]      = job.get("salary", "")
-    row[COL["remote"]]      = job.get("remote", "")
-    row[COL["location"]]    = job.get("location", "")
+    row[COL["salary"]]      = job.get("salary", "") or "n/a"
+    row[COL["remote"]]      = job.get("remote", "") or "Unknown"
+    row[COL["location"]]    = job.get("location", "") or "unknown"
     row[COL["url"]]         = url
     row[COL["date_posted"]] = job.get("date_posted", "")
     row[COL["section"]]     = str(section_num)
@@ -1030,14 +1124,50 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
                              "sheet_row": len(all_rows) - 1})
 
     try:
+        # First get current sheet dimensions to know what to delete
+        sheet_meta = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        sheet_props = next(
+            (s["properties"] for s in sheet_meta.get("sheets", [])
+             if s["properties"]["sheetId"] == 0), {}
+        )
+        current_rows = sheet_props.get("gridProperties", {}).get("rowCount", 1000)
+        current_cols = sheet_props.get("gridProperties", {}).get("columnCount", 26)
+
+        # Clear all values
         service.spreadsheets().values().clear(
             spreadsheetId=sheet_id, range="A:Z"
         ).execute()
+
+        # Write new data
         service.spreadsheets().values().update(
             spreadsheetId=sheet_id, range="A1",
             valueInputOption="USER_ENTERED",
             body={"values": all_rows}
         ).execute()
+
+        # Delete excess rows beyond what we wrote (eliminates ghost rows)
+        rows_written = len(all_rows)
+        if current_rows > rows_written + 5:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"requests": [{"deleteDimension": {
+                    "range": {"sheetId": 0, "dimension": "ROWS",
+                              "startIndex": rows_written,
+                              "endIndex": current_rows}
+                }}]}
+            ).execute()
+
+        # Delete excess columns beyond NUM_COLS (eliminates ghost columns)
+        if current_cols > NUM_COLS + 1:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={"requests": [{"deleteDimension": {
+                    "range": {"sheetId": 0, "dimension": "COLUMNS",
+                              "startIndex": NUM_COLS,
+                              "endIndex": current_cols}
+                }}]}
+            ).execute()
+
         print(f"    📊 Wrote {len(all_rows)-1} rows ({len(sections[0])} pinned, "
               f"{len(sections[1])+len(sections[2])} new, "
               f"{len(sections[3])} circulating, {len(sections[4])} possible, "
@@ -1499,8 +1629,8 @@ def build_email_html(profile, gems, open_mkt, returning):
                 f'<span style="color:#9a3412;font-size:11px;">Also on: {", ".join(flags)}</span>')
 
     def card(job):
-        sal        = job.get("salary") or "Not listed"
-        loc        = job.get("location") or "Location not listed"
+        sal        = job.get("salary") or "n/a"
+        loc        = job.get("location") or "unknown"
         date_p     = job.get("date_posted", "")
         date_html  = (f'<span style="font-size:11px;color:#9ca3af;margin-left:8px;">'
                       f'Posted: {date_p}</span>') if date_p else ""
@@ -1693,7 +1823,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.3.5")
+    print(f"\n🔍 ATS Job Search v4.3.6")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
