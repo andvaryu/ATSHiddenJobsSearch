@@ -1,0 +1,32 @@
+# =============================================================================
+# ATS Job Search — .gitignore
+# Files that should NEVER be committed to GitHub
+# =============================================================================
+
+# Credentials — never share these publicly
+.env
+google_credentials.json
+
+# History and reject logs — personal data, not for sharing
+history (hidden)/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS junk
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code settings
+.vscode/
+
+# Old script versions (keep only current)
+job_search_v*.py
+!job_search.py
+
+# Results output folder
+results/
