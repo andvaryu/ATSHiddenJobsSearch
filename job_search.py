@@ -223,7 +223,7 @@ USER_COLS = ["pinned", "reject", "applied_check", "date_applied", "stage",
              "notes", "date_followed", "contact", "resume_version", "cover_letter"]
 
 SHEET_HEADERS = [
-    "⭐ Pinned", "❌ Reject", "Title", "Company", "Match", "Salary",
+    "Pin", "Reject", "Title", "Company", "Match", "Salary",
     "Remote", "Location", "URL", "Applied!", "Date Posted", "Date Applied",
     "Stage", "Notes", "Date Followed Up", "Contact", "ATS Site", "Syndication",
     "Resume Version", "Cover Letter Notes", "First Seen", "Section",
@@ -259,85 +259,204 @@ def history_path(name):
     return HISTORY_DIR / f"history_{name.lower()}.csv"
 
 
-def reject_path(name):
-    return HISTORY_DIR / f"rejected_urls_{name.lower()}.csv"
+# Enriched history CSV fields — single source of truth for all job state
+HISTORY_FIELDS = [
+    "url", "first_seen", "title", "company", "ats_site",
+    "pinned", "rejected", "applied", "stage", "salary", "location", "match"
+]
 
 
 def load_history(name):
+    """
+    Returns dict {url: {first_seen_date, title, company, pinned, rejected,
+    applied, stage, salary, location, match, ats_site}}
+    Pinned jobs never age out. Rejected jobs kept for 90 days.
+    All others pruned after HISTORY_WEEKS.
+    """
     path   = history_path(name)
     cutoff = datetime.date.today() - datetime.timedelta(days=HISTORY_WEEKS * 7)
+    reject_cutoff = datetime.date.today() - datetime.timedelta(days=REJECT_DAYS)
     hist   = {}
     if not path.exists():
         return hist
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
-                d = datetime.date.fromisoformat(row["first_seen"])
-                if d >= cutoff:
-                    hist[row["url"]] = d
+                url = row.get("url", "")
+                if not url:
+                    continue
+                d        = datetime.date.fromisoformat(row.get("first_seen", "")[:10])
+                pinned   = row.get("pinned", "").upper() in ("TRUE", "1", "YES")
+                rejected = row.get("rejected", "").upper() in ("TRUE", "1", "YES")
+                # Keep if: within window, OR pinned (never expire), OR rejected within 90 days
+                if d >= cutoff or pinned or (rejected and d >= reject_cutoff):
+                    hist[url] = {
+                        "first_seen_date": d,
+                        "first_seen":      d.isoformat(),
+                        "title":           row.get("title", ""),
+                        "company":         row.get("company", ""),
+                        "ats_site":        row.get("ats_site", ""),
+                        "pinned":          pinned,
+                        "rejected":        rejected,
+                        "applied":         row.get("applied", "").upper() in ("TRUE","1","YES"),
+                        "stage":           row.get("stage", ""),
+                        "salary":          row.get("salary", ""),
+                        "location":        row.get("location", ""),
+                        "match":           row.get("match", ""),
+                    }
             except (KeyError, ValueError):
                 continue
     return hist
 
 
-def save_history(name, jobs):
+def get_rejected_urls(history):
+    """Extract set of rejected URLs from enriched history dict."""
+    return {url for url, h in history.items() if h.get("rejected")}
+
+
+def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
+    """
+    Write enriched history CSV. Merges current job metadata with
+    user state from the sheet (pinned, rejected, applied, stage).
+    Pinned jobs never age out. Rejected kept 90 days. Others pruned after HISTORY_WEEKS.
+    """
     path     = history_path(name)
     existing = load_history(name)
     today    = datetime.date.today()
     cutoff   = today - datetime.timedelta(days=HISTORY_WEEKS * 7)
+    reject_cutoff = today - datetime.timedelta(days=REJECT_DAYS)
+
+    # Mark newly rejected URLs
+    if new_rejected_urls:
+        for url in new_rejected_urls:
+            if url in existing:
+                existing[url]["rejected"] = True
+            else:
+                existing[url] = {
+                    "first_seen_date": today,
+                    "first_seen":      today.isoformat(),
+                    "title": "", "company": "", "ats_site": "",
+                    "pinned": False, "rejected": True, "applied": False,
+                    "stage": "", "salary": "", "location": "", "match": "",
+                }
+
+    # Update existing entries with fresh metadata from this run
     for job in jobs:
         url = job.get("url", "")
-        if url and url not in existing:
-            existing[url] = today
+        if not url:
+            continue
+        user     = prev_user_data.get(url, {})
+        pinned   = normalize_bool(user.get("pinned", ""))
+        rejected = normalize_bool(user.get("reject", ""))
+        applied  = normalize_bool(user.get("applied_check", "")) or \
+                   bool(user.get("date_applied", "").strip())
+        stage    = user.get("stage", "")
+
+        if url in existing:
+            entry = existing[url]
+            entry["pinned"]   = pinned
+            entry["rejected"] = rejected or entry.get("rejected", False)
+            entry["applied"]  = applied
+            if stage:                  entry["stage"]    = stage
+            if job.get("salary"):      entry["salary"]   = job["salary"]
+            if job.get("location"):    entry["location"] = job["location"]
+            if job.get("relevance_label"): entry["match"] = job["relevance_label"]
+            if job.get("title"):       entry["title"]    = job["title"]
+            if job.get("company"):     entry["company"]  = job["company"]
+            if job.get("ats_site"):    entry["ats_site"] = job["ats_site"]
+        else:
+            existing[url] = {
+                "first_seen_date": today,
+                "first_seen":      today.isoformat(),
+                "title":           job.get("title", ""),
+                "company":         job.get("company", ""),
+                "ats_site":        job.get("ats_site", ""),
+                "pinned":          pinned,
+                "rejected":        rejected,
+                "applied":         applied,
+                "stage":           stage,
+                "salary":          job.get("salary", ""),
+                "location":        job.get("location", ""),
+                "match":           job.get("relevance_label", ""),
+            }
+
+    # Write back — prune based on rules
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["url", "first_seen"])
+        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDS)
         writer.writeheader()
-        for url, d in existing.items():
-            if d >= cutoff:
-                writer.writerow({"url": url, "first_seen": d.isoformat()})
+        for url, entry in existing.items():
+            d = entry.get("first_seen_date", today)
+            if isinstance(d, str):
+                try: d = datetime.date.fromisoformat(d[:10])
+                except: d = today
+            pinned   = entry.get("pinned", False)
+            rejected = entry.get("rejected", False)
+            # Keep if: within window, pinned (never expire), or rejected within 90 days
+            if d >= cutoff or pinned or (rejected and d >= reject_cutoff):
+                writer.writerow({
+                    "url":        url,
+                    "first_seen": d.isoformat(),
+                    "title":      entry.get("title", ""),
+                    "company":    entry.get("company", ""),
+                    "ats_site":   entry.get("ats_site", ""),
+                    "pinned":     "TRUE" if pinned else "FALSE",
+                    "rejected":   "TRUE" if rejected else "FALSE",
+                    "applied":    "TRUE" if entry.get("applied") else "FALSE",
+                    "stage":      entry.get("stage", ""),
+                    "salary":     entry.get("salary", ""),
+                    "location":   entry.get("location", ""),
+                    "match":      entry.get("match", ""),
+                })
+
+    pinned_count = sum(1 for e in existing.values() if e.get("pinned"))
+    return pinned_count
 
 
 def load_rejected(name):
-    """Returns set of rejected URLs within 90-day window."""
-    path   = reject_path(name)
-    cutoff = datetime.date.today() - datetime.timedelta(days=REJECT_DAYS)
-    urls   = set()
-    if not path.exists():
-        return urls
-    with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            try:
-                d = datetime.date.fromisoformat(row["rejected_date"])
-                if d >= cutoff:
-                    urls.add(row["url"])
-            except (KeyError, ValueError):
-                continue
-    return urls
+    """Convenience wrapper — loads rejected URLs from enriched history."""
+    return get_rejected_urls(load_history(name))
 
 
 def save_rejected(name, new_urls):
-    """Append newly rejected URLs, prune entries older than 90 days."""
-    path     = reject_path(name)
+    """Convenience wrapper — marks URLs as rejected in enriched history."""
+    # Load existing, mark as rejected, save back
+    existing = load_history(name)
     today    = datetime.date.today()
-    cutoff   = today - datetime.timedelta(days=REJECT_DAYS)
-    existing = {}
-    if path.exists():
-        with open(path, newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                try:
-                    d = datetime.date.fromisoformat(row["rejected_date"])
-                    if d >= cutoff:
-                        existing[row["url"]] = d
-                except (KeyError, ValueError):
-                    continue
     for url in new_urls:
-        if url not in existing:
-            existing[url] = today
+        if url in existing:
+            existing[url]["rejected"] = True
+        else:
+            existing[url] = {
+                "first_seen_date": today, "first_seen": today.isoformat(),
+                "title": "", "company": "", "ats_site": "",
+                "pinned": False, "rejected": True, "applied": False,
+                "stage": "", "salary": "", "location": "", "match": "",
+            }
+    # Write back via save_history with empty jobs list
+    path = history_path(name)
+    reject_cutoff = today - datetime.timedelta(days=REJECT_DAYS)
+    cutoff = today - datetime.timedelta(days=HISTORY_WEEKS * 7)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["url", "rejected_date"])
+        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDS)
         writer.writeheader()
-        for url, d in existing.items():
-            writer.writerow({"url": url, "rejected_date": d.isoformat()})
+        for url, entry in existing.items():
+            d = entry.get("first_seen_date", today)
+            if isinstance(d, str):
+                try: d = datetime.date.fromisoformat(d[:10])
+                except: d = today
+            pinned   = entry.get("pinned", False)
+            rejected = entry.get("rejected", False)
+            if d >= cutoff or pinned or (rejected and d >= reject_cutoff):
+                writer.writerow({
+                    "url": url, "first_seen": d.isoformat(),
+                    "title": entry.get("title",""), "company": entry.get("company",""),
+                    "ats_site": entry.get("ats_site",""),
+                    "pinned":   "TRUE" if pinned else "FALSE",
+                    "rejected": "TRUE" if rejected else "FALSE",
+                    "applied":  "TRUE" if entry.get("applied") else "FALSE",
+                    "stage": entry.get("stage",""), "salary": entry.get("salary",""),
+                    "location": entry.get("location",""), "match": entry.get("match",""),
+                })
 
 
 # =============================================================================
@@ -683,9 +802,11 @@ def get_job_section(job, prev_user_data):
 def search_for_profile(profile):
     name      = profile["name"]
     sal_min   = profile.get("salary_minimum", 0)
-    history   = load_history(name)
+    history   = load_history(name)   # Now returns {url: rich_dict}
     rejected  = load_rejected(name)
-    print(f"\n  👤 {name} | min ${sal_min:,} | {len(history)} history | {len(rejected)} rejected")
+    pinned_count = sum(1 for e in history.values() if e.get("pinned"))
+    print(f"\n  👤 {name} | min ${sal_min:,} | {len(history)} history | "
+          f"{pinned_count} pinned | {len(rejected)} filtered out")
 
     results, seen = [], set()
 
@@ -705,7 +826,8 @@ def search_for_profile(profile):
                 salary = extract_salary(text)
                 remote = extract_remote(text)
                 loc    = extract_location(text)
-                first_seen_date = history.get(url, datetime.date.today())
+                hist_entry      = history.get(url, {})
+                first_seen_date = hist_entry.get("first_seen_date", datetime.date.today())
                 results.append({
                     "title":             r.get("title", "No title"),
                     "company":           extract_company(r, site, url),
@@ -768,7 +890,7 @@ def search_for_profile(profile):
         if job["seen_before"]:
             job["unsyndicated"] = True
 
-    save_history(name, results)
+    # save_history called later in update_sheet after we have prev_user_data
     return results
 
 
@@ -896,8 +1018,8 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
                          "is_spacer": False, "sheet_row": len(all_rows) - 1})
 
         for i, job in enumerate(jobs):
-            # Skip ghost rows — jobs with no title and no URL
-            if not job.get("title") and not job.get("url"):
+            # Skip ghost rows — must have both a title and a URL to be valid
+            if not job.get("title", "").strip() or not job.get("url", "").startswith("http"):
                 continue
             row = job_to_row(job, sec, prev_user_data, today)
             row = ["TRUE" if v is True else "FALSE" if v is False else v for v in row]
@@ -1233,26 +1355,60 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
 
     current_urls = {j["url"] for j in all_jobs}
     rejected     = load_rejected(name)
+    history      = load_history(name)
 
+    # Resurrect pinned jobs from enriched history — the single source of truth
+    for url, h in history.items():
+        if url in current_urls or url in rejected:
+            continue
+        if not h.get("pinned"):
+            continue
+        # This URL was previously pinned — resurrect it
+        fs = h.get("first_seen_date", datetime.date.today() - datetime.timedelta(days=8))
+        revived = {
+            "title":           h.get("title", ""),
+            "company":         h.get("company", ""),
+            "url":             url,
+            "ats_site":        h.get("ats_site", ""),
+            "keywords":        "",
+            "snippet":         "",
+            "salary":          h.get("salary", ""),
+            "remote":          "",
+            "location":        h.get("location", ""),
+            "date_posted":     "",
+            "seen_before":     True,
+            "first_seen_date": fs,
+            "first_seen":      fs.isoformat() if hasattr(fs, "isoformat") else str(fs),
+            "on_linkedin":     False,
+            "on_indeed":       False,
+            "on_glassdoor":    False,
+            "unsyndicated":    True,
+            "relevance_score": 0.0,
+            "relevance_label": h.get("match", "🔵 Possible") or "🔵 Possible",
+            "relevance_reasons": [],
+        }
+        all_jobs.append(revived)
+        current_urls.add(url)
+        # Ensure pinned state is in prev_user_data
+        if url not in prev_user_data:
+            prev_user_data[url] = {}
+        prev_user_data[url]["pinned"] = "TRUE"
+        print(f"    📌 Resurrected: {h.get('title','')[:55]}")
+
+    # Handle other dropped jobs from sheet (applied or has user data)
     for url, p in prev_user_data.items():
         if url in current_urls or url in rejected:
             continue
-
         is_pinned  = normalize_bool(p.get("pinned", ""))
         is_applied = normalize_bool(p.get("applied_check", "")) or bool(p.get("date_applied","").strip())
-        has_data   = any(p.get(c, "").strip() for c in USER_COLS
+        has_data   = any(str(p.get(c, "")).strip() for c in USER_COLS
                          if c not in ("pinned", "reject", "applied_check"))
-
-        # Pinned checkbox alone is sufficient to preserve — no other data needed
-        # Applied jobs are always preserved
-        # Other jobs only preserved if they have user-entered data
         if is_pinned or is_applied or has_data:
             label = p.get("match", "🔵 Possible") or "🔵 Possible"
             try:
                 fs = datetime.date.fromisoformat(p.get("first_seen", "")[:10])
             except (ValueError, TypeError):
                 fs = datetime.date.today() - datetime.timedelta(days=8)
-
             revived = {
                 "title":           p.get("title", ""),
                 "company":         p.get("company", ""),
@@ -1270,28 +1426,35 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
                 "on_linkedin":     False,
                 "on_indeed":       False,
                 "on_glassdoor":    False,
-                "unsyndicated":    is_pinned,  # Keep pinned in Sec 0
+                "unsyndicated":    is_pinned,
                 "relevance_score": float(p.get("relevance_score", 0) or 0),
                 "relevance_label": label,
                 "relevance_reasons": [],
             }
             all_jobs.append(revived)
-            # Mark expired if no user action taken
-            if not is_pinned and not is_applied and not p.get("date_applied","").strip():
+            current_urls.add(url)
+            if not is_pinned and not is_applied:
                 prev_user_data[url]["stage"] = "Expired?"
 
-    # Ensure no duplicate URLs
+    # Deduplicate and validate
     seen_urls = set()
     deduped   = []
     for job in all_jobs:
-        if job["url"] not in seen_urls:
-            seen_urls.add(job["url"])
-            deduped.append(job)
-
-    # Ensure all jobs have a valid relevance_label (prevents floating dots)
-    for job in deduped:
+        url = job.get("url", "")
+        if not url or not url.startswith("http") or url in seen_urls:
+            continue
+        seen_urls.add(url)
         if not job.get("relevance_label"):
             job["relevance_label"] = "🔵 Possible"
+        # Skip jobs with no title at all (true ghost rows)
+        if not job.get("title", "").strip():
+            continue
+        deduped.append(job)
+
+    # Save enriched history with current user state
+    pinned_saved = save_history(name, deduped, prev_user_data, new_rejected_urls)
+    if pinned_saved:
+        print(f"    📌 {pinned_saved} pinned jobs saved in history")
 
     print(f"    📋 Writing {len(deduped)} jobs to sheet")
     rewrite_sheet(service, sheet_id, name, deduped, prev_user_data)
@@ -1530,7 +1693,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.3.3")
+    print(f"\n🔍 ATS Job Search v4.3.5")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 

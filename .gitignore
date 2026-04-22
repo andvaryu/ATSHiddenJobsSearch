@@ -9,6 +9,7 @@ google_credentials.json
 
 # History and reject logs — personal data, not for sharing
 history (hidden)/
+history/
 
 # Python cache
 __pycache__/
