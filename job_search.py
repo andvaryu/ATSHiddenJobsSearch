@@ -651,17 +651,45 @@ def extract_company(result, site, url):
 
 
 def extract_salary(text):
-    m = re.search(r'\$\d{1,3}(?:,\d{3})+\s*[-–to]+\s*\$\d{1,3}(?:,\d{3})+',
+    """
+    Extract salary range or single value from text.
+    Handles: $XXX,XXX | $XXXXXX | $XXXK — all with dash/en-dash/em-dash/space variants and 'to'
+    Also catches ranges without $ sign (e.g. '150,000 – 180,000')
+    """
+    # Separator: dash, en-dash, em-dash, or 'to' — with optional surrounding spaces
+    SEP = r'\s*(?:[-\u2013\u2014]|to)\s*'
+
+    # Token: $XXX,XXX or $XXXXXX or $XXXK (with optional $)
+    T_DOLLAR  = r'\$\d{1,3}(?:,\d{3})+'   # $150,000
+    T_NODOT   = r'\$\d{4,7}'              # $150000
+    T_K       = r'\$\d{2,3}[kK]'          # $150K
+    T_COMMA   = r'\d{1,3}(?:,\d{3})+'     # 150,000 (no $)
+
+    TOKEN = f'(?:{T_DOLLAR}|{T_NODOT}|{T_K}|{T_COMMA})'
+    RANGE = TOKEN + SEP + TOKEN
+
+    # 1. Full range match (highest priority)
+    m = re.search(RANGE, text, re.IGNORECASE)
+    if m:
+        return m.group(0).strip()
+
+    # 2. Single $XXX,XXX
+    m = re.search(r'\$\d{1,3}(?:,\d{3})+(?:\s*(?:/yr|/year|annually))?',
                   text, re.IGNORECASE)
     if m: return m.group(0).strip()
-    m = re.search(r'\$\d{1,3}(?:,\d{3})+(?:\s*(?:/yr|/year|annually))?', text, re.IGNORECASE)
+
+    # 3. Single $XXXXXX (no comma)
+    m = re.search(r'\$\d{5,7}(?:\s*(?:/yr|/year|annually))?', text, re.IGNORECASE)
     if m: return m.group(0).strip()
-    m = re.search(r'\$\d{2,3}[kK]\s*[-–to]+\s*\$\d{2,3}[kK]', text)
+
+    # 4. Single $XXXK
+    m = re.search(r'\$\d{2,3}[kK](?:\+)?', text)
     if m: return m.group(0).strip()
-    m = re.search(r'\$\d{2,3}[kK]', text)
-    if m: return m.group(0).strip()
+
+    # 5. Hourly
     m = re.search(r'\$\d{2,3}(?:\.\d{2})?\s*/\s*h(?:r|our)', text, re.IGNORECASE)
     if m: return m.group(0).strip()
+
     return ""
 
 
@@ -973,10 +1001,17 @@ def search_for_profile(profile):
         job["unsyndicated"] = not any(synd.values())
 
         pg_sal, pg_loc, pg_rem, pg_date = fetch_job_page(job["url"])
-        if pg_sal  and not job["salary"]:      job["salary"]      = pg_sal
-        if pg_loc  and not job["location"]:    job["location"]    = pg_loc
-        if pg_rem  and job["remote"] == "In-person": job["remote"] = pg_rem
-        if pg_date and not job["date_posted"]: job["date_posted"] = pg_date
+        # Treat "n/a" and "unknown" as blank — page fetch should overwrite them
+        cur_sal = job["salary"] if job["salary"] not in ("", "n/a") else ""
+        cur_loc = job["location"] if job["location"] not in ("", "unknown") else ""
+        if pg_sal  and not cur_sal:                  job["salary"]      = pg_sal
+        if pg_loc  and not cur_loc:                  job["location"]    = pg_loc
+        if pg_rem  and job["remote"] in ("In-person", "🏢 In-person", ""):
+                                                     job["remote"]      = pg_rem
+        if pg_date and not job["date_posted"]:       job["date_posted"] = pg_date
+        if pg_sal or pg_loc or pg_rem or pg_date:
+            print(f"      📄 Fetched: sal={pg_sal or '-'} loc={pg_loc or '-'} "
+                  f"rem={pg_rem or '-'} date={pg_date or '-'}")
 
         sal_val = extract_salary_value(job["salary"])
         if sal_val is not None and sal_val < sal_min:
@@ -1868,7 +1903,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.3.8")
+    print(f"\n🔍 ATS Job Search v4.3.9")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
