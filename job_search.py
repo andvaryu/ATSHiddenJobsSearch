@@ -1674,23 +1674,18 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
 # 🔧 EMAIL BUILDER
 # =============================================================================
 
-def build_email_html(profile, gems, open_mkt, returning):
-    name        = profile["name"]
-    date_str    = datetime.date.today().strftime("%B %d, %Y")
-    sheet_id    = SHEET_IDS.get(name, "")
-    sheet_url   = (f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
-                   if sheet_id and sheet_id.strip() else "")
-    total_email = len(gems) + len(open_mkt) + len(returning)
-    gems_top    = gems[:ROWS_VISIBLE]
-    gems_rest   = gems[ROWS_VISIBLE:]
-    picks_top   = open_mkt[:ROWS_VISIBLE]
-    picks_rest  = open_mkt[ROWS_VISIBLE:]
-    ret_top     = returning[:ROWS_VISIBLE]
-    ret_rest    = returning[ROWS_VISIBLE:]
+def build_email_html(profile, gems):
+    name     = profile["name"]
+    date_str = datetime.date.today().strftime("%B %d, %Y")
+    sheet_id = SHEET_IDS.get(name, "")
+    sheet_url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+                 if sheet_id and sheet_id.strip() else "")
 
     def rbadge(val):
-        c = {"Remote":("#dcfce7","#166534"),"Hybrid":("#fef9c3","#92400e"),
-             "In-range":("#eff6ff","#1e40af"),"In-person":("#fee2e2","#991b1b")}
+        c = {"🏠 Remote":    ("#dcfce7","#166534"),
+             "🏠🏢 Hybrid":  ("#fef9c3","#92400e"),
+             "🏠 In-range":  ("#eff6ff","#1e40af"),
+             "🏢 In-person": ("#fee2e2","#991b1b")}
         bg, fg = c.get(val, ("#f3f4f6","#6b7280"))
         return (f'<span style="background:{bg};color:{fg};padding:1px 7px;'
                 f'border-radius:10px;font-size:11px;font-weight:600;">{val}</span>')
@@ -1701,19 +1696,13 @@ def build_email_html(profile, gems, open_mkt, returning):
         return (f'<span style="background:{bg};color:{fg};padding:1px 8px;'
                 f'border-radius:10px;font-size:11px;font-weight:700;">{label}</span>')
 
-    def synd(job):
-        flags = [s for s, k in [("LinkedIn","on_linkedin"),("Indeed","on_indeed"),
-                                  ("Glassdoor","on_glassdoor")] if job.get(k)]
-        return (f'<span style="color:#16a34a;font-size:11px;">&#10003; Not on major boards</span>'
-                if not flags else
-                f'<span style="color:#9a3412;font-size:11px;">Also on: {", ".join(flags)}</span>')
-
     def card(job):
-        sal        = job.get("salary") or "n/a"
-        loc        = job.get("location") or "unknown"
-        date_p     = job.get("date_posted", "")
-        date_html  = (f'<span style="font-size:11px;color:#9ca3af;margin-left:8px;">'
-                      f'Posted: {date_p}</span>') if date_p else ""
+        sal      = job.get("salary") or "n/a"
+        loc      = job.get("location") or "unknown"
+        date_p   = job.get("date_posted", "")
+        date_html = (f'<span style="font-size:11px;color:#9ca3af;margin-left:8px;">'
+                     f'Posted: {date_p}</span>') if date_p else ""
+        remote   = job.get("remote", "") or "🏢 In-person"
         return f"""
         <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;
                     margin-bottom:10px;background:#fff;">
@@ -1722,7 +1711,7 @@ def build_email_html(profile, gems, open_mkt, returning):
             <span style="background:#eff6ff;color:#1e40af;padding:1px 8px;
                          border-radius:10px;font-size:12px;font-weight:600;
                          margin-right:4px;">💰 {sal}</span>
-            {rbadge(job['remote'])}
+            {rbadge(remote)}
             <span style="font-size:12px;color:#6b7280;margin-left:6px;">📍 {loc}</span>
             {date_html}
           </div>
@@ -1731,80 +1720,26 @@ def build_email_html(profile, gems, open_mkt, returning):
                style="font-size:15px;font-weight:600;color:#1e3a5f;
                       text-decoration:underline;">{job['title']}</a>
           </div>
-          <div style="font-size:13px;color:#374151;margin-bottom:6px;">
+          <div style="font-size:13px;color:#374151;margin-bottom:4px;">
             🏢 {job['company']}
           </div>
-          <div style="font-size:13px;color:#4b5563;line-height:1.5;
-                      margin-bottom:6px;">{job['snippet']}</div>
-          {synd(job)}
+          <div style="font-size:13px;color:#4b5563;line-height:1.5;">
+            {job.get('snippet','')}
+          </div>
         </div>"""
 
-    def grid_row(job, hdr=False):
-        if hdr:
-            cells = "".join(
-                f"<th style='padding:8px 10px;font-size:12px;font-weight:700;"
-                f"text-align:left;background:#1e3a5f;color:#fff;'>{h}</th>"
-                for h in ["Company","Title","Match","Salary","Remote","Location","Link"]
-            )
-            return f"<tr>{cells}</tr>"
-        t   = job['title'].split('|')[0].split('-')[0].strip()[:45]
-        sal = job.get('salary') or '—'
-        loc = job.get('location') or '—'
-        return (
-            f"<tr style='border-bottom:1px solid #f3f4f6;'>"
-            f"<td style='padding:7px 10px;font-size:12px;'>{job['company']}</td>"
-            f"<td style='padding:7px 10px;font-size:12px;'>{t}</td>"
-            f"<td style='padding:7px 10px;font-size:12px;'>{job['relevance_label']}</td>"
-            f"<td style='padding:7px 10px;font-size:12px;color:#1e40af;'>{sal}</td>"
-            f"<td style='padding:7px 10px;font-size:12px;'>{job['remote']}</td>"
-            f"<td style='padding:7px 10px;font-size:12px;color:#6b7280;'>{loc}</td>"
-            f"<td style='padding:7px 10px;font-size:12px;'>"
-            f"<a href='{job['url']}' style='color:#2563eb;font-weight:600;"
-            f"text-decoration:underline;'>Apply →</a></td></tr>"
-        )
-
-    def grid(jobs):
-        if not jobs:
-            return "<p style='color:#9ca3af;font-size:13px;font-style:italic;'>None this run.</p>"
-        hdr  = f"<thead>{grid_row(None, hdr=True)}</thead>"
-        body = "<tbody>" + "\n".join(grid_row(j) for j in jobs) + "</tbody>"
-        return (f'<table style="width:100%;border-collapse:collapse;'
-                f'border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;'
-                f'background:#fff;">{hdr}{body}</table>')
-
-    def sec_hdr(sec_num):
-        label, defn = SECTION_LABELS[sec_num]
-        bg = f"#{SECTION_COLORS[sec_num]['bg']}"
-        return (f'<div style="background:{bg};color:#fff;border-radius:8px;'
-                f'padding:12px 16px;margin:24px 0 10px;">'
-                f'<div style="font-size:15px;font-weight:700;">{label}</div>'
-                f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">{defn}</div>'
-                f'</div>')
-
-    def more_cards(jobs, color, label):
-        if not jobs: return ""
-        inner = "\n".join(card(j) for j in jobs)
-        return (f'<details style="margin-top:8px;">'
-                f'<summary style="cursor:pointer;font-size:13px;font-weight:600;'
-                f'color:{color};padding:8px 0;list-style:none;">'
-                f'&#9654; Show {len(jobs)} more {label}</summary>'
-                f'<div style="margin-top:10px;">{inner}</div></details>')
-
-    def more_grid(jobs, label):
-        if not jobs: return ""
-        return (f'<details style="margin-top:8px;">'
-                f'<summary style="cursor:pointer;font-size:13px;font-weight:600;'
-                f'color:#92400e;padding:8px 0;list-style:none;">'
-                f'&#9654; Show {len(jobs)} more {label}</summary>'
-                f'<div style="margin-top:10px;">{grid(jobs)}</div></details>')
+    gems_html = ("\n".join(card(j) for j in gems)
+                 if gems else
+                 "<p style='color:#9ca3af;font-size:13px;font-style:italic;'>"
+                 "No new hidden gems this run — check your tracker for the full list.</p>")
 
     sheet_btn = ""
     if sheet_url:
         sheet_btn = (f'<div style="background:#f0f9ff;border:1px solid #bae6fd;'
                      f'border-radius:8px;padding:12px 16px;margin:12px 0;">'
                      f'<div style="font-size:13px;color:#0369a1;margin-bottom:8px;">'
-                     f'<strong>📊 Your Job Tracker</strong> — pin, reject, and track '
-                     f'applications in Google Sheets.</div>'
+                     f'<strong>📊 Full results in your tracker</strong> — all matches, '
+                     f'pinned jobs, and application status.</div>'
                      f'<a href="{sheet_url}" style="display:inline-block;'
                      f'background:#1e3a5f;color:#fff;padding:8px 16px;border-radius:6px;'
                      f'font-size:13px;font-weight:600;text-decoration:none;">'
@@ -1817,57 +1752,39 @@ def build_email_html(profile, gems, open_mkt, returning):
                        'font-size:13px;color:#92400e;font-weight:600;">'
                        '🧪 TEST MODE — routed to sender for review.</div>')
 
-    gems_html  = "\n".join(card(j) for j in gems_top) or "<p style='color:#9ca3af;font-size:13px;font-style:italic;'>None this run.</p>"
-    picks_html = "\n".join(card(j) for j in picks_top) or "<p style='color:#9ca3af;font-size:13px;font-style:italic;'>None this run.</p>"
+    label, defn = SECTION_LABELS[1]
+    sec_hdr = (f'<div style="background:#166534;color:#fff;border-radius:8px;'
+               f'padding:12px 16px;margin:16px 0 10px;">'
+               f'<div style="font-size:15px;font-weight:700;">{label} — {len(gems)} new</div>'
+               f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">{defn}</div>'
+               f'</div>')
 
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <style>
   body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
         background:#f3f4f6;margin:0;padding:20px;color:#111827;}}
-  .wrap{{max-width:800px;margin:0 auto;}}
+  .wrap{{max-width:700px;margin:0 auto;}}
   .hdr{{background:#1e3a5f;color:#fff;border-radius:10px 10px 0 0;padding:22px 26px;}}
   .hdr h1{{margin:0 0 3px;font-size:21px;}}
   .hdr p{{margin:0;font-size:13px;opacity:.75;}}
-  .stats{{display:flex;background:#fff;border:1px solid #e5e7eb;border-top:none;}}
-  .stat{{flex:1;text-align:center;padding:12px 6px;border-right:1px solid #f3f4f6;}}
-  .stat:last-child{{border-right:none;}}
-  .num{{font-size:24px;font-weight:700;}}
-  .lbl{{font-size:11px;color:#6b7280;margin-top:1px;}}
   .warning{{background:#fef9c3;border:1px solid #fde68a;border-radius:8px;
             padding:10px 14px;margin:12px 0;font-size:13px;color:#92400e;}}
-  details summary{{list-style:none;}}
-  details summary::-webkit-details-marker{{display:none;}}
   .footer{{text-align:center;color:#9ca3af;font-size:11px;padding:16px 0 0;}}
 </style></head>
 <body><div class="wrap">
   {test_banner}
   <div class="hdr">
-    <h1>Job Search Results — {name}</h1>
-    <p>{date_str} &nbsp;&middot;&nbsp; {DAYS_BACK}-day window &nbsp;&middot;&nbsp;
-       {len(ATS_SITES)} ATS platforms &nbsp;&middot;&nbsp; {total_email} in email</p>
+    <h1>💎 Hidden Gems — {name}</h1>
+    <p>{date_str} &nbsp;&middot;&nbsp; {DAYS_BACK}-day search window &nbsp;&middot;&nbsp;
+       {len(ATS_SITES)} ATS platforms</p>
   </div>
-  <div class="stats">
-    <div class="stat"><div class="num" style="color:#16a34a;">{len(gems)}</div>
-      <div class="lbl">🟢 Hidden Gems</div></div>
-    <div class="stat"><div class="num" style="color:#2563eb;">{len(open_mkt)}</div>
-      <div class="lbl">🔵 Open Market</div></div>
-    <div class="stat"><div class="num" style="color:#d97706;">{len(returning)}</div>
-      <div class="lbl">🟡 Still Circulating</div></div>
-  </div>
-  <div class="warning">⚠️ <strong>Verify each posting is still accepting applications
-    before tailoring your resume or cover letter.</strong></div>
+  <div class="warning">⚠️ <strong>Verify each posting is still open before applying.</strong>
+    Full results including all matches are in your tracker.</div>
   {sheet_btn}
-  {sec_hdr(1)}
+  {sec_hdr}
   {gems_html}
-  {more_cards(gems_rest, "#166534", "Hidden Gems")}
-  {sec_hdr(2)}
-  {picks_html}
-  {more_cards(picks_rest, "#1e40af", "Open Market Picks")}
-  {sec_hdr(3)}
-  {grid(ret_top)}
-  {more_grid(ret_rest, "Still Circulating")}
-  <div class="footer">ATS Job Search Script &middot; serper.dev &middot; {date_str}</div>
+  <div class="footer">ATS Job Search · serper.dev · {date_str}</div>
 </div></body></html>"""
 
 
@@ -1903,7 +1820,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.3.9")
+    print(f"\n🔍 ATS Job Search v4.3.10")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
@@ -1940,23 +1857,19 @@ def main():
         def age_days(job):
             return (today - job.get("first_seen_date", today)).days
 
-        sg_new     = sorted([j for j in results
-                             if j["relevance_label"] in ("🟢 Strong","🟡 Good")
-                             and age_days(j) <= GEM_AGE_DAYS],
-                            key=lambda x: x["relevance_score"], reverse=True)
-        returning  = sorted([j for j in results
-                             if j["relevance_label"] in ("🟢 Strong","🟡 Good")
-                             and age_days(j) > GEM_AGE_DAYS],
-                            key=lambda x: x["relevance_score"], reverse=True)
-        possible   = [j for j in results if j["relevance_label"] == "🔵 Possible"]
-
-        gems     = [j for j in sg_new if j["unsyndicated"]]
-        open_mkt = [j for j in sg_new if not j["unsyndicated"]]
+        gems = sorted(
+            [j for j in results
+             if j["relevance_label"] in ("🟢 Strong", "🟡 Good")
+             and not j["seen_before"]
+             and j["unsyndicated"]
+             and (today - j.get("first_seen_date", today)).days <= GEM_AGE_DAYS],
+            key=lambda x: x["relevance_score"], reverse=True
+        )
 
         if SHEETS_ENABLED:
             update_sheet(name, results, prev_user_data, new_rejected_urls)
 
-        html = build_email_html(profile, gems, open_mkt, returning)
+        html = build_email_html(profile, gems)
         send_email(profile["email"], name, html)
         print("   Cooling down...\n")
         time.sleep(5)
