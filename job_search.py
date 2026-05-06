@@ -38,11 +38,14 @@ from googleapiclient.discovery import build
 load_dotenv(Path(__file__).parent / ".env")
 
 # =============================================================================
-# ✏️  TEST MODE
+# ✏️  RUN MODE
 # =============================================================================
 
-TEST_MODE         = True
-TEST_PROFILE_ONLY = True
+TEST_MODE         = False   # False = emails go to real recipients
+TEST_PROFILE_ONLY = True    # True = Andy only (other profiles dormant until v5)
+
+# Set to True temporarily to see why jobs are being filtered out
+DEBUG_FILTERS     = False
 
 # =============================================================================
 # ✏️  CREDENTIALS — from .env
@@ -52,7 +55,13 @@ SENDER_EMAIL        = os.getenv("SENDER_EMAIL", "")
 SENDER_APP_PASSWORD = os.getenv("SENDER_APP_PASSWORD", "")
 BCC_EMAIL           = os.getenv("BCC_EMAIL", "")
 SERPER_API_KEY      = os.getenv("SERPER_API_KEY", "")
-SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "google_credentials.json")
+_raw_creds = os.getenv("GOOGLE_CREDENTIALS_FILE", "google_credentials.json")
+# If relative path, resolve it relative to the script's location (not working directory)
+# This ensures it works on PythonAnywhere where cwd may differ from script location
+if not os.path.isabs(_raw_creds):
+    SERVICE_ACCOUNT_FILE = str(Path(__file__).parent / _raw_creds)
+else:
+    SERVICE_ACCOUNT_FILE = _raw_creds
 
 SHEET_IDS = {
     "Andy":     os.getenv("SHEET_ID_ANDY", ""),
@@ -72,11 +81,8 @@ GEM_AGE_DAYS      = 7     # Jobs stay in Sec 1/2 for this many days
 ROWS_VISIBLE      = 20
 ATS_RESULTS_CAP   = 5
 SHEETS_ENABLED    = True
-
-# PythonAnywhere trigger endpoint (set after deploying)
-# Format: "https://yourusername.pythonanywhere.com/run"
-TRIGGER_ENDPOINT  = os.getenv("TRIGGER_ENDPOINT", "")
-TRIGGER_SECRET    = os.getenv("TRIGGER_SECRET", "")
+FETCH_CAP         = 40    # Max jobs to run full page fetch on per profile
+                          # Prevents 40+ min runs when many Strong/Good jobs found
 
 # =============================================================================
 # ✏️  EXCLUSION FILTERS
@@ -98,10 +104,6 @@ EXCLUDE_SNIPPET_KEYWORDS = [
     "entry level", "internship", "intern ", " intern,", "new grad",
     "recent grad", "data scientist",
 ]
-
-# Debug mode — writes debug_filtered_NAME.csv with every dropped job and reason
-# Set to False for normal production runs
-DEBUG_FILTERS = True
 
 # =============================================================================
 # ✏️  PROFILES
@@ -990,6 +992,16 @@ def search_for_profile(profile):
     strong_good = [j for j in results
                    if j["relevance_label"] in ("🟢 Strong", "🟡 Good")
                    and not j["seen_before"]]
+
+    if len(strong_good) > FETCH_CAP:
+        print(f"    ⚠️  {len(strong_good)} Strong/Good found — capping fetch at {FETCH_CAP} "
+              f"(top by score). Remaining marked Possible.")
+        strong_good.sort(key=lambda x: x["relevance_score"], reverse=True)
+        for job in strong_good[FETCH_CAP:]:
+            job["relevance_label"] = "🔵 Possible"
+            job["relevance_score"] = min(job["relevance_score"], 9.9)
+        strong_good = strong_good[:FETCH_CAP]
+
     print(f"    {len(strong_good)} new Strong/Good to cross-ref+fetch")
 
     for i, job in enumerate(strong_good):
@@ -1820,7 +1832,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.3.10")
+    print(f"\n🔍 ATS Job Search v4.3.12")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
@@ -1845,10 +1857,16 @@ def main():
             service = get_sheets_service()
             if service:
                 prev_user_data = read_existing_rows(service, sheet_id)
-                # Collect URLs newly marked as Reject
+                print(f"    📖 Read {len(prev_user_data)} existing rows from sheet")
                 for url, p in prev_user_data.items():
                     if normalize_bool(p.get("reject", "")):
                         new_rejected_urls.append(url)
+                if new_rejected_urls:
+                    print(f"    🚫 {len(new_rejected_urls)} newly rejected jobs found in sheet")
+            else:
+                print(f"    ⚠️  Could not connect to Google Sheets — sheet will not update")
+        elif not sheet_id:
+            print(f"    ⚠️  No Sheet ID configured for {name}")
 
         results = search_for_profile(profile)
 
@@ -1867,8 +1885,10 @@ def main():
         )
 
         if SHEETS_ENABLED:
+            print(f"    📊 Updating sheet for {name}...")
             update_sheet(name, results, prev_user_data, new_rejected_urls)
 
+        print(f"    📧 Sending email — {len(gems)} Hidden Gems...")
         html = build_email_html(profile, gems)
         send_email(profile["email"], name, html)
         print("   Cooling down...\n")
