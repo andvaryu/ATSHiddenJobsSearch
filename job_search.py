@@ -215,7 +215,7 @@ REMOTE_OPTIONS = [
 
 COL = {
     "pinned":          0,   # A — User (green checkbox)
-    "reject":          1,   # B — User (red X checkbox)
+    "reject":          1,   # B — User (red checkbox)
     "title":           2,   # C — Script
     "company":         3,   # D — Script
     "match":           4,   # E — Script
@@ -225,17 +225,17 @@ COL = {
     "url":             8,   # I — Script
     "hidden":          9,   # J — Script (Y if not syndicated)
     "applied_check":  10,   # K — User (checkbox)
-    "date_posted":    11,   # L — Script
-    "date_applied":   12,   # M — User/Script (auto-filled)
-    "stage":          13,   # N — User (dropdown)
-    "notes":          14,   # O — User (text wrap)
-    "date_followed":  15,   # P — User
-    "contact":        16,   # Q — User
-    "ats_site":       17,   # R — Script
-    "syndication":    18,   # S — Script
-    "resume_version": 19,   # T — User
-    "cover_letter":   20,   # U — User (text wrap)
-    "first_seen":     21,   # V — Script
+    "date_posted":    11,   # L — Script  ← moved left
+    "first_seen":     12,   # M — Script  ← moved left
+    "date_applied":   13,   # N — User/Script (auto-filled)
+    "stage":          14,   # O — User (dropdown)
+    "notes":          15,   # P — User (text wrap)
+    "date_followed":  16,   # Q — User
+    "contact":        17,   # R — User
+    "ats_site":       18,   # S — Script
+    "syndication":    19,   # T — Script
+    "resume_version": 20,   # U — User
+    "cover_letter":   21,   # V — User (text wrap)
     "section":        22,   # W — Script
 }
 NUM_COLS  = 23
@@ -245,28 +245,33 @@ USER_COLS = ["pinned", "reject", "applied_check", "date_applied", "stage",
 SHEET_HEADERS = [
     "Pin", "Reject", "Title", "Company", "Match", "Salary",
     "Remote", "Location", "URL", "Hidden?", "Applied!", "Date Posted",
-    "Date Applied", "Stage", "Notes", "Date Followed Up", "Contact",
-    "ATS Site", "Syndication", "Resume Version", "Cover Letter Notes",
-    "First Seen", "Section",
+    "First Seen", "Date Applied", "Stage", "Notes", "Date Followed Up", "Contact",
+    "ATS Site", "Syndication", "Resume Version", "Cover Letter Notes", "Section",
 ]
 
+JUST_POSTED_DAYS = 2   # Jobs posted within this many days qualify for Just Posted section
+
 SECTION_LABELS = {
-    0: ("📌 Pinned",              "Jobs you've starred — stay here until unpinned"),
-    1: ("💎 Hidden Gems",         "New · Not on LinkedIn/Indeed/Glassdoor · Fresh within 7 days"),
-    2: ("🌐 Open Market Picks",   "New · On major boards · Ranked by relevance · Fresh within 7 days"),
-    3: ("♻️ Still Circulating",   "Older than 7 days or seen in a previous run"),
-    4: ("🤷 Other Matches",       "Possible matches below Strong/Good threshold · Sheet only"),
-    5: ("✅ Applied & Waiting",   "You've marked as applied"),
+    0: ("📌 Pinned",            "Jobs you've starred — stay here until unpinned"),
+    1: ("💎 Hidden Gems",       "New · Not on major boards · Fresh within 7 days"),
+    6: ("⚡ Just Posted",       f"Posted within {JUST_POSTED_DAYS} days · Not already in Hidden Gems"),
+    2: ("🌐 Open Market Picks", "New · On major boards · Ranked by relevance · Fresh within 7 days"),
+    3: ("♻️ Still Circulating", "Older than 7 days or seen in a previous run"),
+    4: ("🤷 Other Matches",     "Possible matches below Strong/Good threshold · Sheet only"),
+    5: ("✅ Applied & Waiting", "You've marked as applied"),
 }
 
 SECTION_COLORS = {
     0: {"bg": "1e3a5f", "fg": "ffffff"},
     1: {"bg": "166534", "fg": "ffffff"},
+    6: {"bg": "b45309", "fg": "ffffff"},   # amber — Just Posted
     2: {"bg": "1e40af", "fg": "ffffff"},
     3: {"bg": "92400e", "fg": "ffffff"},
     4: {"bg": "4b5563", "fg": "ffffff"},
     5: {"bg": "5b21b6", "fg": "ffffff"},
 }
+
+SECTION_ORDER = [0, 1, 6, 2, 3, 4, 5]   # display order in sheet
 
 # =============================================================================
 # 🔧 HISTORY & REJECT TRACKING
@@ -879,6 +884,21 @@ def score_job(job, profile):
 # 🔧 SECTION LOGIC — age-based (7 days) replaces seen_before for Sec 1/2
 # =============================================================================
 
+def is_just_posted(job):
+    """True if date_posted is within JUST_POSTED_DAYS of today."""
+    dp = job.get("date_posted", "")
+    if not dp:
+        return False
+    # Try to parse various date formats from the page fetch
+    for fmt in ("%b %d, %Y", "%Y-%m-%d", "%B %d, %Y"):
+        try:
+            d = datetime.datetime.strptime(dp.strip(), fmt).date()
+            return (datetime.date.today() - d).days <= JUST_POSTED_DAYS
+        except ValueError:
+            continue
+    return False
+
+
 def get_job_section(job, prev_user_data):
     url        = job.get("url", "")
     prev       = prev_user_data.get(url, {})
@@ -902,11 +922,16 @@ def get_job_section(job, prev_user_data):
     if label == "🔵 Possible":
         return 4
 
-    # Fresh jobs (within GEM_AGE_DAYS) stay in Sec 1 or 2
+    # Fresh jobs (within GEM_AGE_DAYS)
     if age_days <= GEM_AGE_DAYS:
-        return 1 if job.get("unsyndicated") else 2
+        if job.get("unsyndicated"):
+            return 1   # Hidden Gems — takes priority over Just Posted
+        # Just Posted — syndicated but posted within 2 days
+        if is_just_posted(job):
+            return 6
+        return 2   # Open Market Picks
 
-    # Older than 7 days → Section 3
+    # Older than 7 days → Still Circulating
     return 3
 
 
@@ -1069,7 +1094,7 @@ def get_sheets_service():
 def read_existing_rows(service, sheet_id):
     try:
         result = service.spreadsheets().values().get(
-            spreadsheetId=sheet_id, range="A:V"
+            spreadsheetId=sheet_id, range="A:W"
         ).execute()
         rows = result.get("values", [])
     except Exception as e:
@@ -1155,10 +1180,12 @@ def job_to_row(job, section_num, prev_user_data, today):
 
 def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
     today    = datetime.date.today().isoformat()
-    sections = {i: [] for i in range(6)}
+    sections = {i: [] for i in SECTION_ORDER}
 
     for job in all_jobs:
         sec = get_job_section(job, prev_user_data)
+        if sec not in sections:
+            sections[sec] = []
         sections[sec].append(job)
 
     for sec in sections:
@@ -1166,30 +1193,28 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
 
     all_rows = [SHEET_HEADERS]
     row_meta = []
-    blank_row = [""] * NUM_COLS
+    blank_row    = [""] * NUM_COLS
     first_section = True
 
-    for sec in range(6):
-        jobs = sections[sec]
+    for sec in SECTION_ORDER:
+        jobs = sections.get(sec, [])
         if not jobs:
             continue
 
-        # Add 2 blank spacer rows before every section except the first
+        # 2 blank spacer rows before every section except the first
         if not first_section:
             for _ in range(2):
                 all_rows.append(blank_row[:])
                 row_meta.append({"section": sec, "is_header": False,
-                                 "is_overflow": False, "is_spacer": True,
-                                 "sheet_row": len(all_rows) - 1})
+                                 "is_overflow": False, "is_spacer": True})
         first_section = False
 
         label, _ = SECTION_LABELS[sec]
         all_rows.append([label] + [""] * (NUM_COLS - 1))
-        row_meta.append({"section": sec, "is_header": True, "is_overflow": False,
-                         "is_spacer": False, "sheet_row": len(all_rows) - 1})
+        row_meta.append({"section": sec, "is_header": True,
+                         "is_overflow": False, "is_spacer": False})
 
         for i, job in enumerate(jobs):
-            # Skip ghost rows — must have both a title and a URL to be valid
             if not job.get("title", "").strip() or not job.get("url", "").startswith("http"):
                 continue
             row = job_to_row(job, sec, prev_user_data, today)
@@ -1197,8 +1222,7 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
             all_rows.append(row)
             overflow = (sec != 5) and (i >= ROWS_VISIBLE)
             row_meta.append({"section": sec, "is_header": False,
-                             "is_overflow": overflow, "is_spacer": False,
-                             "sheet_row": len(all_rows) - 1})
+                             "is_overflow": overflow, "is_spacer": False})
 
     try:
         # First get current sheet dimensions to know what to delete
@@ -1245,10 +1269,14 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
                 }}]}
             ).execute()
 
-        print(f"    📊 Wrote {len(all_rows)-1} rows ({len(sections[0])} pinned, "
-              f"{len(sections[1])+len(sections[2])} new, "
-              f"{len(sections[3])} circulating, {len(sections[4])} possible, "
-              f"{len(sections[5])} applied)")
+        print(f"    📊 Wrote {len(all_rows)-1} rows ("
+              f"{len(sections.get(0,[]))} pinned, "
+              f"{len(sections.get(1,[]))} gems, "
+              f"{len(sections.get(6,[]))} just posted, "
+              f"{len(sections.get(2,[]))} open market, "
+              f"{len(sections.get(3,[]))} circulating, "
+              f"{len(sections.get(4,[]))} possible, "
+              f"{len(sections.get(5,[]))} applied)")
     except Exception as e:
         print(f"    ❌ Write error: {e}"); return
 
@@ -1257,11 +1285,10 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
 
 def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
     """
-    Clean formatting rewrite v4.3.7:
-    - No row grouping (removed entirely)
-    - Strict ordering: clear → section headers → per-row A/B colors → checkboxes
-    - Green/red col A/B applied per data row (skips section headers)
-    - Grey italic for n/a and unknown values in salary/location cols
+    Formatting v4.4:
+    - Column order updated (Date Posted + First Seen moved left)
+    - A/B color + checkbox applied in single repeatCell per row (fixes two-tone bug)
+    - Just Posted section (6) added with amber header
     """
     batch = []
     gid   = 0
@@ -1272,31 +1299,31 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
         "fields": "gridProperties.frozenRowCount"
     }})
 
-    # 2. Column widths
+    # 2. Column widths — updated for new layout
     widths = {
-        0: 30,   # Pin
-        1: 30,   # Reject
-        2: 220,  # Title
-        3: 160,  # Company
-        4: 50,   # Match
-        5: 100,  # Salary
-        6: 90,   # Remote
-        7: 90,   # Location
-        8: 100,  # URL
-        9: 40,   # Hidden?
-        10: 55,  # Applied!
-        11: 90,  # Date Posted
-        12: 100, # Date Applied
-        13: 140, # Stage
-        14: 205, # Notes
-        15: 100, # Date Followed Up
-        16: 140, # Contact
-        17: 110, # ATS Site
-        18: 130, # Syndication
-        19: 120, # Resume Version
-        20: 200, # Cover Letter Notes
-        21: 90,  # First Seen
-        22: 50,  # Section
+        0:  30,   # A — Pin
+        1:  30,   # B — Reject
+        2:  220,  # C — Title
+        3:  160,  # D — Company
+        4:  50,   # E — Match
+        5:  100,  # F — Salary
+        6:  90,   # G — Remote
+        7:  90,   # H — Location
+        8:  100,  # I — URL
+        9:  40,   # J — Hidden?
+        10: 55,   # K — Applied!
+        11: 90,   # L — Date Posted  ← moved
+        12: 90,   # M — First Seen   ← moved
+        13: 100,  # N — Date Applied
+        14: 140,  # O — Stage
+        15: 205,  # P — Notes
+        16: 100,  # Q — Date Followed Up
+        17: 140,  # R — Contact
+        18: 110,  # S — ATS Site
+        19: 130,  # T — Syndication
+        20: 120,  # U — Resume Version
+        21: 200,  # V — Cover Letter Notes
+        22: 50,   # W — Section
     }
     for col_idx, px in widths.items():
         batch.append({"updateDimensionProperties": {
@@ -1305,7 +1332,7 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "properties": {"pixelSize": px}, "fields": "pixelSize"
         }})
 
-    # 3. Top header row — dark background, white bold text
+    # 3. Top header row — dark bg, white bold text
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1},
         "cell": {"userEnteredFormat": {
@@ -1338,67 +1365,55 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
     # 6. Section header colors — precisely one row each
     for i, meta in enumerate(row_meta):
         sr = i + 1
-        if meta["is_header"]:
-            sec   = meta["section"]
-            color = SECTION_COLORS.get(sec, {"bg": "333333"})
-            bg    = color["bg"]
-            r     = int(bg[0:2], 16) / 255
-            g     = int(bg[2:4], 16) / 255
-            b     = int(bg[4:6], 16) / 255
-            batch.append({"repeatCell": {
-                "range": {"sheetId": gid,
-                          "startRowIndex": sr, "endRowIndex": sr + 1},
-                "cell": {"userEnteredFormat": {
-                    "backgroundColor": {"red": r, "green": g, "blue": b},
-                    "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1},
-                                   "bold": True, "fontSize": 10}
-                }},
-                "fields": "userEnteredFormat(backgroundColor,textFormat)"
-            }})
+        if not meta["is_header"]:
+            continue
+        sec   = meta["section"]
+        color = SECTION_COLORS.get(sec, {"bg": "333333"})
+        bg    = color["bg"]
+        r     = int(bg[0:2], 16) / 255
+        g     = int(bg[2:4], 16) / 255
+        b     = int(bg[4:6], 16) / 255
+        batch.append({"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": {"red": r, "green": g, "blue": b},
+                "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1},
+                               "bold": True, "fontSize": 10}
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat)"
+        }})
 
-    # 7. Per data-row: green col A, red col B, checkboxes
-    #    Applied row by row so section header rows are never touched
+    # 7. Per data row: col A (green bg + checkbox) and col B (red bg + checkbox)
+    #    Combined into single repeatCell per column per row — fixes two-tone bug
     data_rows = [i + 1 for i, m in enumerate(row_meta)
                  if not m["is_header"] and not m.get("is_spacer", False)]
 
     for sr in data_rows:
-        # Green background col A
+        # Col A — green background + checkbox in ONE call
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                       "startColumnIndex": 0, "endColumnIndex": 1},
-            "cell": {"userEnteredFormat": {
-                "backgroundColor": {"red": 0.88, "green": 0.96, "blue": 0.88}
-            }},
-            "fields": "userEnteredFormat.backgroundColor"
+            "cell": {
+                "userEnteredFormat": {
+                    "backgroundColor": {"red": 0.88, "green": 0.96, "blue": 0.88}
+                },
+                "dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}
+            },
+            "fields": "userEnteredFormat.backgroundColor,dataValidation"
         }})
-        # Red background col B
+        # Col B — red background + checkbox in ONE call
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                       "startColumnIndex": 1, "endColumnIndex": 2},
-            "cell": {"userEnteredFormat": {
-                "backgroundColor": {"red": 0.99, "green": 0.88, "blue": 0.88}
-            }},
-            "fields": "userEnteredFormat.backgroundColor"
+            "cell": {
+                "userEnteredFormat": {
+                    "backgroundColor": {"red": 0.99, "green": 0.88, "blue": 0.88}
+                },
+                "dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}
+            },
+            "fields": "userEnteredFormat.backgroundColor,dataValidation"
         }})
-        # Pin checkbox col A
-        batch.append({"repeatCell": {
-            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
-                      "startColumnIndex": 0, "endColumnIndex": 1},
-            "cell": {"dataValidation": {
-                "condition": {"type": "BOOLEAN"}, "showCustomUi": True
-            }},
-            "fields": "dataValidation"
-        }})
-        # Reject checkbox col B
-        batch.append({"repeatCell": {
-            "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
-                      "startColumnIndex": 1, "endColumnIndex": 2},
-            "cell": {"dataValidation": {
-                "condition": {"type": "BOOLEAN"}, "showCustomUi": True
-            }},
-            "fields": "dataValidation"
-        }})
-        # Applied! checkbox col K (10)
+        # Col K (10) — Applied! checkbox
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                       "startColumnIndex": 10, "endColumnIndex": 11},
@@ -1408,35 +1423,31 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "fields": "dataValidation"
         }})
 
-    # 8. Stage dropdown col N (13) — whole column
+    # 8. Stage dropdown col O (14)
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1,
                   "startColumnIndex": COL["stage"], "endColumnIndex": COL["stage"] + 1},
         "cell": {"dataValidation": {
-            "condition": {
-                "type": "ONE_OF_LIST",
-                "values": [{"userEnteredValue": s} for s in STAGE_OPTIONS]
-            },
+            "condition": {"type": "ONE_OF_LIST",
+                          "values": [{"userEnteredValue": s} for s in STAGE_OPTIONS]},
             "showCustomUi": True, "strict": False
         }},
         "fields": "dataValidation"
     }})
 
-    # Remote dropdown col G (6)
+    # 9. Remote dropdown col G (6)
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1,
                   "startColumnIndex": COL["remote"], "endColumnIndex": COL["remote"] + 1},
         "cell": {"dataValidation": {
-            "condition": {
-                "type": "ONE_OF_LIST",
-                "values": [{"userEnteredValue": s} for s in REMOTE_OPTIONS]
-            },
+            "condition": {"type": "ONE_OF_LIST",
+                          "values": [{"userEnteredValue": s} for s in REMOTE_OPTIONS]},
             "showCustomUi": True, "strict": False
         }},
         "fields": "dataValidation"
     }})
 
-    # 9. Text wrap — Notes (col 14) and Cover Letter Notes (col 20)
+    # 10. Text wrap — Notes (col P/15) and Cover Letter Notes (col V/21)
     for wrap_col in [COL["notes"], COL["cover_letter"]]:
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": 1,
@@ -1445,27 +1456,19 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "fields": "userEnteredFormat.wrapStrategy"
         }})
 
-    # 10. Grey italic for n/a and unknown — handled in step 11 after black font reset
+    # 11. Black font reset on text columns + grey italic for n/a / unknown
     grey_italic = {
         "foregroundColor": {"red": 0.6, "green": 0.6, "blue": 0.6},
-        "italic": True,
-        "fontSize": 9
+        "italic": True, "fontSize": 9
     }
-
-    # 11. Final pass: force black non-bold font on text columns for data rows
-    #     Prevents white text bleed-over from section header formatting
-    text_cols = [
-        COL["title"], COL["company"], COL["match"], COL["remote"],
-        COL["location"], COL["date_posted"], COL["date_applied"],
-        COL["date_followed"], COL["contact"], COL["ats_site"],
-        COL["syndication"], COL["hidden"], COL["first_seen"],
-    ]
     black_normal = {
         "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0},
-        "bold": False,
-        "italic": False,
-        "fontSize": 10
+        "bold": False, "italic": False, "fontSize": 10
     }
+    text_cols = [COL["title"], COL["company"], COL["match"], COL["remote"],
+                 COL["location"], COL["date_posted"], COL["first_seen"],
+                 COL["date_applied"], COL["date_followed"], COL["contact"],
+                 COL["ats_site"], COL["syndication"], COL["hidden"]]
     for col_idx in text_cols:
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": 1,
@@ -1473,15 +1476,16 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "cell": {"userEnteredFormat": {"textFormat": black_normal}},
             "fields": "userEnteredFormat.textFormat"
         }})
-    # Re-apply grey italic AFTER the black reset (so n/a and unknown stay grey)
+
+    # Grey italic for n/a and unknown — per row, applied after black reset
     for i, meta in enumerate(row_meta):
         sr = i + 1
         if meta["is_header"] or meta.get("is_spacer"):
             continue
         row = all_rows[sr] if sr < len(all_rows) else []
-        salary_val   = row[COL["salary"]]   if len(row) > COL["salary"]   else ""
-        location_val = row[COL["location"]] if len(row) > COL["location"] else ""
-        if str(salary_val) in ("n/a", ""):
+        sal = row[COL["salary"]]   if len(row) > COL["salary"]   else ""
+        loc = row[COL["location"]] if len(row) > COL["location"] else ""
+        if str(sal) in ("n/a", ""):
             batch.append({"repeatCell": {
                 "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                           "startColumnIndex": COL["salary"],
@@ -1489,7 +1493,7 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
                 "cell": {"userEnteredFormat": {"textFormat": grey_italic}},
                 "fields": "userEnteredFormat.textFormat"
             }})
-        if str(location_val) in ("unknown", ""):
+        if str(loc) in ("unknown", ""):
             batch.append({"repeatCell": {
                 "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                           "startColumnIndex": COL["location"],
@@ -1686,7 +1690,7 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
 # 🔧 EMAIL BUILDER
 # =============================================================================
 
-def build_email_html(profile, gems):
+def build_email_html(profile, gems, just_posted):
     name     = profile["name"]
     date_str = datetime.date.today().strftime("%B %d, %Y")
     sheet_id = SHEET_IDS.get(name, "")
@@ -1771,6 +1775,17 @@ def build_email_html(profile, gems):
                f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">{defn}</div>'
                f'</div>')
 
+    jp_label, jp_defn = SECTION_LABELS[6]
+    jp_color = f"#{SECTION_COLORS[6]['bg']}"
+    jp_hdr = (f'<div style="background:{jp_color};color:#fff;border-radius:8px;'
+              f'padding:12px 16px;margin:20px 0 10px;">'
+              f'<div style="font-size:15px;font-weight:700;">{jp_label} — {len(just_posted)} new</div>'
+              f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">{jp_defn}</div>'
+              f'</div>')
+
+    jp_html = ("\n".join(card(j) for j in just_posted)
+               if just_posted else "")
+
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <style>
@@ -1796,6 +1811,8 @@ def build_email_html(profile, gems):
   {sheet_btn}
   {sec_hdr}
   {gems_html}
+  {jp_hdr if just_posted else ""}
+  {jp_html}
   <div class="footer">ATS Job Search · serper.dev · {date_str}</div>
 </div></body></html>"""
 
@@ -1832,7 +1849,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.3.12")
+    print(f"\n🔍 ATS Job Search v4.4")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
@@ -1884,12 +1901,24 @@ def main():
             key=lambda x: x["relevance_score"], reverse=True
         )
 
+        # Just Posted — syndicated Strong/Good, posted within 2 days, not already a gem
+        gem_urls = {j["url"] for j in gems}
+        just_posted = sorted(
+            [j for j in results
+             if j["relevance_label"] in ("🟢 Strong", "🟡 Good")
+             and not j["seen_before"]
+             and not j["unsyndicated"]
+             and j["url"] not in gem_urls
+             and is_just_posted(j)],
+            key=lambda x: x["relevance_score"], reverse=True
+        )
+
         if SHEETS_ENABLED:
             print(f"    📊 Updating sheet for {name}...")
             update_sheet(name, results, prev_user_data, new_rejected_urls)
 
-        print(f"    📧 Sending email — {len(gems)} Hidden Gems...")
-        html = build_email_html(profile, gems)
+        print(f"    📧 Sending email — {len(gems)} Hidden Gems, {len(just_posted)} Just Posted...")
+        html = build_email_html(profile, gems, just_posted)
         send_email(profile["email"], name, html)
         print("   Cooling down...\n")
         time.sleep(5)
