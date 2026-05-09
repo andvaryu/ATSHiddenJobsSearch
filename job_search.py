@@ -193,11 +193,27 @@ PROFILES = [
 ]
 
 ATS_SITES = [
+    # Original 14
     "ashbyhq.com", "lever.co", "greenhouse.io", "workable.com",
     "bamboohr.com", "paylocity.com", "icims.com", "jobvite.com",
     "myworkdayjobs.com", "smartrecruiters.com", "recruitee.com",
     "applytojob.com", "jazz.co", "breezy.hr",
+    # New additions
+    "rippling.com", "ultipro.com", "eightfold.ai",
 ]
+
+EMPLOYER_SITES = [
+    "careers.microsoft.com",
+    "amazon.jobs",
+    "jobs.apple.com",
+    "careers.google.com",
+    "providence.jobs",
+    "jobs.boeing.com",
+    "jobs.costco.com",
+    "careers.t-mobile.com",
+]
+
+ALL_SOURCES = ATS_SITES + EMPLOYER_SITES
 SYNDICATION_SITES = ["linkedin.com", "indeed.com", "glassdoor.com"]
 
 STAGE_OPTIONS = [
@@ -808,12 +824,41 @@ def fetch_job_page(url):
             except (json.JSONDecodeError, Exception):
                 continue
 
-        # Text fallback
-        clean = re.sub(r'<[^>]+>', ' ', html[:12000])
-        clean = re.sub(r'\s+', ' ', clean)
-        if not salary:   salary   = extract_salary(clean)
-        if not location: location = extract_location(clean)
-        if not remote:   remote   = extract_remote(clean)
+        # Text fallback — scan BOTH head (for location/remote/date) and tail (for salary)
+        # Salary almost always appears at the bottom of job descriptions
+        head_html = html[:5000]
+        tail_html = html[-6000:]   # Last 6000 chars catches compensation sections
+
+        # Strip tags from both sections
+        def clean_html(raw):
+            c = re.sub(r'<[^>]+>', ' ', raw)
+            return re.sub(r'\s+', ' ', c)
+
+        head_clean = clean_html(head_html)
+        tail_clean = clean_html(tail_html)
+        full_clean = head_clean + " " + tail_clean
+
+        if not location: location = extract_location(head_clean) or extract_location(tail_clean)
+        if not remote:   remote   = extract_remote(full_clean)
+
+        if not salary:
+            # Strategy 1: Compensation/Salary label proximity — scan 400 chars after label
+            # then run full salary extraction on that window
+            prox_match = re.search(
+                r'(?:compensation|salary range|base pay|pay range|total comp|pay:)'
+                r'(.{0,400})',
+                tail_clean, re.IGNORECASE | re.DOTALL
+            )
+            if prox_match:
+                salary = extract_salary(prox_match.group(1))
+
+            # Strategy 2: General regex on tail (catches bottom-of-page salary)
+            if not salary:
+                salary = extract_salary(tail_clean)
+
+            # Strategy 3: General regex on head (catches top/sidebar salary)
+            if not salary:
+                salary = extract_salary(head_clean)
 
         return salary, location, remote, date_posted
 
@@ -950,7 +995,7 @@ def search_for_profile(profile):
 
     results, seen = [], set()
 
-    for site in ATS_SITES:
+    for site in ALL_SOURCES:
         for combo in profile["keyword_combos"]:
             hits = serper_search(
                 build_query(combo, site, DAYS_BACK, profile["industry_filter"]),
@@ -1804,7 +1849,7 @@ def build_email_html(profile, gems, just_posted):
   <div class="hdr">
     <h1>💎 Hidden Gems — {name}</h1>
     <p>{date_str} &nbsp;&middot;&nbsp; {DAYS_BACK}-day search window &nbsp;&middot;&nbsp;
-       {len(ATS_SITES)} ATS platforms</p>
+       {len(ALL_SOURCES)} sources</p>
   </div>
   <div class="warning">⚠️ <strong>Verify each posting is still open before applying.</strong>
     Full results including all matches are in your tracker.</div>
@@ -1849,9 +1894,10 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.4")
+    print(f"\n🔍 ATS Job Search v4.4.1")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
-          f"{len(ATS_SITES)} ATS | TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
+          f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
+          f"TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
     if not SERPER_API_KEY:
         print("❌ SERPER_API_KEY missing from .env"); return
