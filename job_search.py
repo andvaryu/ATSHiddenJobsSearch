@@ -42,7 +42,7 @@ load_dotenv(Path(__file__).parent / ".env")
 # =============================================================================
 
 TEST_MODE         = False   # False = emails go to real recipients
-TEST_PROFILE_ONLY = True    # True = Andy only (other profiles dormant until v5)
+TEST_PROFILE_ONLY = False   # True = Andy only (other profiles dormant until v5)
 
 # Set to True temporarily to see why jobs are being filtered out
 DEBUG_FILTERS     = False
@@ -131,7 +131,7 @@ PROFILES = [
         ],
         "industry_filter": [
             "healthcare", "community health", "health system",
-            "federally qualified", "nonprofit", "public health",
+            "federally qualified", "nonprofit", "public health", "life sciences", "medical", "science", "insurance", "clinical"
         ],
         # No required_title_keywords for Andy — product+healthcare handled via keyword_combo above
     },
@@ -142,7 +142,7 @@ PROFILES = [
         "priority_titles": ["chief", "vp", "vice president", "svp", "avp", "executive director"],
         "location_preference": "remote",
         "ok_cities": ["santa rosa", "san francisco", "sonoma", "napa", "oakland"],
-        "required_title_keywords": ["communications", "marketing", "brand", "reputation"],
+        "required_title_keywords": ["communications", "communication", "community", "comms", "voice", "reputation"],
         "keyword_combos": [
             ["chief communications officer"],
             ["VP", "communications", "healthcare"],
@@ -152,7 +152,7 @@ PROFILES = [
             ["chief marketing", "communications", "healthcare"],
         ],
         "industry_filter": [
-            "healthcare", "health system", "hospital", "life sciences", "nonprofit",
+            "healthcare", "health system", "hospital", "life sciences", "nonprofit", "medical", "Science", "insurance", "clinical"
         ],
     },
     {
@@ -162,7 +162,7 @@ PROFILES = [
         "priority_titles": ["director", "senior director", "vp", "vice president", "executive director"],
         "location_preference": "remote",
         "ok_cities": ["seattle", "redmond", "bellevue", "renton", "bothell", "kirkland"],
-        "required_title_keywords": ["communications", "marketing", "brand", "reputation"],
+        "required_title_keywords": ["communications", "marketing", "brand", "reputation", "social", "campaign", "community"],
         "keyword_combos": [
             ["senior marketing director", "healthcare"],
             ["director", "marketing", "healthcare"],
@@ -172,7 +172,7 @@ PROFILES = [
             ["director", "brand", "healthcare"],
         ],
         "industry_filter": [
-            "healthcare", "health system", "hospital", "health plan", "nonprofit",
+            "healthcare", "health system", "hospital", "health plan", "nonprofit", "medical", "science"
         ],
     },
     {
