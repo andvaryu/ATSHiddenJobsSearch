@@ -113,7 +113,7 @@ PROFILES = [
     {
         "name": "Andy",
         "email": "andrew@varyu.net",
-        "salary_minimum": 150000,
+        "salary_minimum": 145000,
         "priority_titles": ["director", "vp", "vice president", "chief", "head of", "senior"],
         "location_preference": "remote",
         "ok_cities": ["seattle", "redmond", "bellevue", "renton", "bothell", "kirkland"],
@@ -127,19 +127,22 @@ PROFILES = [
             ["communications", "engagement", "director"],
             ["VP", "communications"],
             ["communications", "nonprofit"],
+            ["product", "director", "healthcare"],   # product in title + healthcare in body
         ],
         "industry_filter": [
             "healthcare", "community health", "health system",
             "federally qualified", "nonprofit", "public health",
         ],
+        # No required_title_keywords for Andy — product+healthcare handled via keyword_combo above
     },
     {
         "name": "Vanessa",
         "email": "vdegier@gmail.com",
-        "salary_minimum": 200000,
+        "salary_minimum": 180000,
         "priority_titles": ["chief", "vp", "vice president", "svp", "avp", "executive director"],
         "location_preference": "remote",
         "ok_cities": ["santa rosa", "san francisco", "sonoma", "napa", "oakland"],
+        "required_title_keywords": ["communications", "marketing", "brand", "reputation"],
         "keyword_combos": [
             ["chief communications officer"],
             ["VP", "communications", "healthcare"],
@@ -155,10 +158,11 @@ PROFILES = [
     {
         "name": "Maryjane",
         "email": "maryjanebeth@gmail.com",
-        "salary_minimum": 200000,
+        "salary_minimum": 160000,
         "priority_titles": ["director", "senior director", "vp", "vice president", "executive director"],
         "location_preference": "remote",
         "ok_cities": ["seattle", "redmond", "bellevue", "renton", "bothell", "kirkland"],
+        "required_title_keywords": ["communications", "marketing", "brand", "reputation"],
         "keyword_combos": [
             ["senior marketing director", "healthcare"],
             ["director", "marketing", "healthcare"],
@@ -174,7 +178,7 @@ PROFILES = [
     {
         "name": "David",
         "email": "dvaryu@gmail.com",
-        "salary_minimum": 150000,
+        "salary_minimum": 120000,
         "priority_titles": ["senior", "lead", "principal", "staff", "manager"],
         "location_preference": "",
         "ok_cities": [],
@@ -519,7 +523,7 @@ WRONG_CITY_SIGNALS = [
 ]
 
 
-def check_exclusion_filter(job):
+def check_exclusion_filter(job, profile=None):
     """Returns (passes: bool, reason: str)"""
     title   = job.get("title", "").lower()
     snippet = job.get("snippet", "").lower()
@@ -529,6 +533,11 @@ def check_exclusion_filter(job):
     for kw in EXCLUDE_SNIPPET_KEYWORDS:
         if kw.lower() in snippet:
             return False, f"snippet contains '{kw}'"
+    # Per-profile required title keywords (Vanessa + Maryjane)
+    if profile:
+        required = profile.get("required_title_keywords", [])
+        if required and not any(kw.lower() in title for kw in required):
+            return False, f"title missing required keyword ({'/'.join(required)})"
     return True, ""
 
 
@@ -566,8 +575,8 @@ def check_location_filter(job, profile):
     return True, ""
 
 
-def passes_exclusion_filter(job):
-    passed, _ = check_exclusion_filter(job)
+def passes_exclusion_filter(job, profile=None):
+    passed, _ = check_exclusion_filter(job, profile)
     return passed
 
 
@@ -1041,7 +1050,7 @@ def search_for_profile(profile):
     dropped     = []   # (job, reason) tuples for debug
 
     for job in results:
-        excl_pass, excl_reason = check_exclusion_filter(job)
+        excl_pass, excl_reason = check_exclusion_filter(job, profile)
         if not excl_pass:
             dropped.append((job, excl_reason)); continue
         loc_pass, loc_reason = check_location_filter(job, profile)
@@ -1894,7 +1903,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.4.1")
+    print(f"\n🔍 ATS Job Search v4.4.2")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
           f"TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
