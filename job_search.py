@@ -33,6 +33,7 @@ import requests
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # Load credentials from .env
 load_dotenv(Path(__file__).parent / ".env")
@@ -41,8 +42,8 @@ load_dotenv(Path(__file__).parent / ".env")
 # ✏️  RUN MODE
 # =============================================================================
 
-TEST_MODE         = False   # False = emails go to real recipients
-TEST_PROFILE_ONLY = False   # True = Andy only (other profiles dormant until v5)
+TEST_MODE         = False
+TEST_PROFILE_ONLY = False
 
 # Set to True temporarily to see why jobs are being filtered out
 DEBUG_FILTERS     = False
@@ -56,8 +57,6 @@ SENDER_APP_PASSWORD = os.getenv("SENDER_APP_PASSWORD", "")
 BCC_EMAIL           = os.getenv("BCC_EMAIL", "")
 SERPER_API_KEY      = os.getenv("SERPER_API_KEY", "")
 _raw_creds = os.getenv("GOOGLE_CREDENTIALS_FILE", "google_credentials.json")
-# If relative path, resolve it relative to the script's location (not working directory)
-# This ensures it works on PythonAnywhere where cwd may differ from script location
 if not os.path.isabs(_raw_creds):
     SERVICE_ACCOUNT_FILE = str(Path(__file__).parent / _raw_creds)
 else:
@@ -77,29 +76,22 @@ SHEET_IDS = {
 DAYS_BACK         = 10
 HISTORY_WEEKS     = 3
 REJECT_DAYS       = 90
-GEM_AGE_DAYS      = 7     # Jobs stay in Sec 1/2 for this many days
+GEM_AGE_DAYS      = 7
 ROWS_VISIBLE      = 20
 ATS_RESULTS_CAP   = 5
 SHEETS_ENABLED    = True
-FETCH_CAP         = 40    # Max jobs to run full page fetch on per profile
-                          # Prevents 40+ min runs when many Strong/Good jobs found
+FETCH_CAP         = 40
 
 # =============================================================================
 # ✏️  EXCLUSION FILTERS
 # =============================================================================
 
-# =============================================================================
-# ✏️  EXCLUSION FILTERS
-# =============================================================================
-
-# Jobs dropped if ANY of these appear in the TITLE (case-insensitive)
 EXCLUDE_TITLE_KEYWORDS = [
     "nursing", "nurse", "software engineer", "developer", "recruiter",
     "sales management", "security engineer", "event coordinator",
     "government affairs", "revenue integrity", "payment accuracy",
 ]
 
-# Jobs dropped if ANY of these appear in the SNIPPET
 EXCLUDE_SNIPPET_KEYWORDS = [
     "entry level", "internship", "intern ", " intern,", "new grad",
     "recent grad", "data scientist",
@@ -127,13 +119,13 @@ PROFILES = [
             ["communications", "engagement", "director"],
             ["VP", "communications"],
             ["communications", "nonprofit"],
-            ["product", "director", "healthcare"],   # product in title + healthcare in body
+            ["product", "director", "healthcare"],
         ],
         "industry_filter": [
             "healthcare", "community health", "health system",
-            "federally qualified", "nonprofit", "public health", "life sciences", "medical", "science", "insurance", "clinical"
+            "federally qualified", "nonprofit", "public health",
+            "life sciences", "medical", "science", "insurance", "clinical"
         ],
-        # No required_title_keywords for Andy — product+healthcare handled via keyword_combo above
     },
     {
         "name": "Vanessa",
@@ -152,7 +144,8 @@ PROFILES = [
             ["chief marketing", "communications", "healthcare"],
         ],
         "industry_filter": [
-            "healthcare", "health system", "hospital", "life sciences", "nonprofit", "medical", "Science", "insurance", "clinical"
+            "healthcare", "health system", "hospital", "life sciences",
+            "nonprofit", "medical", "science", "insurance", "clinical"
         ],
     },
     {
@@ -172,7 +165,8 @@ PROFILES = [
             ["director", "brand", "healthcare"],
         ],
         "industry_filter": [
-            "healthcare", "health system", "hospital", "health plan", "nonprofit", "medical", "science"
+            "healthcare", "health system", "hospital", "health plan",
+            "nonprofit", "medical", "science"
         ],
     },
     {
@@ -197,12 +191,10 @@ PROFILES = [
 ]
 
 ATS_SITES = [
-    # Original 14
     "ashbyhq.com", "lever.co", "greenhouse.io", "workable.com",
     "bamboohr.com", "paylocity.com", "icims.com", "jobvite.com",
     "myworkdayjobs.com", "smartrecruiters.com", "recruitee.com",
     "applytojob.com", "jazz.co", "breezy.hr",
-    # New additions
     "rippling.com", "ultipro.com", "eightfold.ai",
 ]
 
@@ -234,29 +226,29 @@ REMOTE_OPTIONS = [
 # =============================================================================
 
 COL = {
-    "pinned":          0,   # A — User (green checkbox)
-    "reject":          1,   # B — User (red checkbox)
-    "title":           2,   # C — Script
-    "company":         3,   # D — Script
-    "match":           4,   # E — Script
-    "salary":          5,   # F — Script
-    "remote":          6,   # G — Script
-    "location":        7,   # H — Script
-    "url":             8,   # I — Script
-    "hidden":          9,   # J — Script (Y if not syndicated)
-    "applied_check":  10,   # K — User (checkbox)
-    "date_posted":    11,   # L — Script  ← moved left
-    "first_seen":     12,   # M — Script  ← moved left
-    "date_applied":   13,   # N — User/Script (auto-filled)
-    "stage":          14,   # O — User (dropdown)
-    "notes":          15,   # P — User (text wrap)
-    "date_followed":  16,   # Q — User
-    "contact":        17,   # R — User
-    "ats_site":       18,   # S — Script
-    "syndication":    19,   # T — Script
-    "resume_version": 20,   # U — User
-    "cover_letter":   21,   # V — User (text wrap)
-    "section":        22,   # W — Script
+    "pinned":          0,
+    "reject":          1,
+    "title":           2,
+    "company":         3,
+    "match":           4,
+    "salary":          5,
+    "remote":          6,
+    "location":        7,
+    "url":             8,
+    "hidden":          9,
+    "applied_check":  10,
+    "date_posted":    11,
+    "first_seen":     12,
+    "date_applied":   13,
+    "stage":          14,
+    "notes":          15,
+    "date_followed":  16,
+    "contact":        17,
+    "ats_site":       18,
+    "syndication":    19,
+    "resume_version": 20,
+    "cover_letter":   21,
+    "section":        22,
 }
 NUM_COLS  = 23
 USER_COLS = ["pinned", "reject", "applied_check", "date_applied", "stage",
@@ -269,7 +261,7 @@ SHEET_HEADERS = [
     "ATS Site", "Syndication", "Resume Version", "Cover Letter Notes", "Section",
 ]
 
-JUST_POSTED_DAYS = 2   # Jobs posted within this many days qualify for Just Posted section
+JUST_POSTED_DAYS = 2
 
 SECTION_LABELS = {
     0: ("📌 Pinned",            "Jobs you've starred — stay here until unpinned"),
@@ -284,14 +276,14 @@ SECTION_LABELS = {
 SECTION_COLORS = {
     0: {"bg": "1e3a5f", "fg": "ffffff"},
     1: {"bg": "166534", "fg": "ffffff"},
-    6: {"bg": "b45309", "fg": "ffffff"},   # amber — Just Posted
+    6: {"bg": "b45309", "fg": "ffffff"},
     2: {"bg": "1e40af", "fg": "ffffff"},
     3: {"bg": "92400e", "fg": "ffffff"},
     4: {"bg": "4b5563", "fg": "ffffff"},
     5: {"bg": "5b21b6", "fg": "ffffff"},
 }
 
-SECTION_ORDER = [0, 1, 6, 2, 3, 4, 5]   # display order in sheet
+SECTION_ORDER = [0, 1, 6, 2, 3, 4, 5]
 
 # =============================================================================
 # 🔧 HISTORY & REJECT TRACKING
@@ -305,7 +297,6 @@ def history_path(name):
     return HISTORY_DIR / f"history_{name.lower()}.csv"
 
 
-# Enriched history CSV fields — single source of truth for all job state
 HISTORY_FIELDS = [
     "url", "first_seen", "title", "company", "ats_site",
     "pinned", "rejected", "applied", "stage", "salary", "location", "match"
@@ -313,12 +304,6 @@ HISTORY_FIELDS = [
 
 
 def load_history(name):
-    """
-    Returns dict {url: {first_seen_date, title, company, pinned, rejected,
-    applied, stage, salary, location, match, ats_site}}
-    Pinned jobs never age out. Rejected jobs kept for 90 days.
-    All others pruned after HISTORY_WEEKS.
-    """
     path   = history_path(name)
     cutoff = datetime.date.today() - datetime.timedelta(days=HISTORY_WEEKS * 7)
     reject_cutoff = datetime.date.today() - datetime.timedelta(days=REJECT_DAYS)
@@ -334,7 +319,6 @@ def load_history(name):
                 d        = datetime.date.fromisoformat(row.get("first_seen", "")[:10])
                 pinned   = row.get("pinned", "").upper() in ("TRUE", "1", "YES")
                 rejected = row.get("rejected", "").upper() in ("TRUE", "1", "YES")
-                # Keep if: within window, OR pinned (never expire), OR rejected within 90 days
                 if d >= cutoff or pinned or (rejected and d >= reject_cutoff):
                     hist[url] = {
                         "first_seen_date": d,
@@ -356,37 +340,28 @@ def load_history(name):
 
 
 def get_rejected_urls(history):
-    """Extract set of rejected URLs from enriched history dict."""
     return {url for url, h in history.items() if h.get("rejected")}
 
 
 def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
-    """
-    Write enriched history CSV. Merges current job metadata with
-    user state from the sheet (pinned, rejected, applied, stage).
-    Pinned jobs never age out. Rejected kept 90 days. Others pruned after HISTORY_WEEKS.
-    """
     path     = history_path(name)
     existing = load_history(name)
     today    = datetime.date.today()
     cutoff   = today - datetime.timedelta(days=HISTORY_WEEKS * 7)
     reject_cutoff = today - datetime.timedelta(days=REJECT_DAYS)
 
-    # Mark newly rejected URLs
     if new_rejected_urls:
         for url in new_rejected_urls:
             if url in existing:
                 existing[url]["rejected"] = True
             else:
                 existing[url] = {
-                    "first_seen_date": today,
-                    "first_seen":      today.isoformat(),
+                    "first_seen_date": today, "first_seen": today.isoformat(),
                     "title": "", "company": "", "ats_site": "",
                     "pinned": False, "rejected": True, "applied": False,
                     "stage": "", "salary": "", "location": "", "match": "",
                 }
 
-    # Update existing entries with fresh metadata from this run
     for job in jobs:
         url = job.get("url", "")
         if not url:
@@ -403,13 +378,13 @@ def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
             entry["pinned"]   = pinned
             entry["rejected"] = rejected or entry.get("rejected", False)
             entry["applied"]  = applied
-            if stage:                  entry["stage"]    = stage
-            if job.get("salary"):      entry["salary"]   = job["salary"]
-            if job.get("location"):    entry["location"] = job["location"]
-            if job.get("relevance_label"): entry["match"] = job["relevance_label"]
-            if job.get("title"):       entry["title"]    = job["title"]
-            if job.get("company"):     entry["company"]  = job["company"]
-            if job.get("ats_site"):    entry["ats_site"] = job["ats_site"]
+            if stage:                      entry["stage"]    = stage
+            if job.get("salary"):          entry["salary"]   = job["salary"]
+            if job.get("location"):        entry["location"] = job["location"]
+            if job.get("relevance_label"): entry["match"]    = job["relevance_label"]
+            if job.get("title"):           entry["title"]    = job["title"]
+            if job.get("company"):         entry["company"]  = job["company"]
+            if job.get("ats_site"):        entry["ats_site"] = job["ats_site"]
         else:
             existing[url] = {
                 "first_seen_date": today,
@@ -426,7 +401,6 @@ def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
                 "match":           job.get("relevance_label", ""),
             }
 
-    # Write back — prune based on rules
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDS)
         writer.writeheader()
@@ -437,7 +411,6 @@ def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
                 except: d = today
             pinned   = entry.get("pinned", False)
             rejected = entry.get("rejected", False)
-            # Keep if: within window, pinned (never expire), or rejected within 90 days
             if d >= cutoff or pinned or (rejected and d >= reject_cutoff):
                 writer.writerow({
                     "url":        url,
@@ -459,13 +432,10 @@ def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
 
 
 def load_rejected(name):
-    """Convenience wrapper — loads rejected URLs from enriched history."""
     return get_rejected_urls(load_history(name))
 
 
 def save_rejected(name, new_urls):
-    """Convenience wrapper — marks URLs as rejected in enriched history."""
-    # Load existing, mark as rejected, save back
     existing = load_history(name)
     today    = datetime.date.today()
     for url in new_urls:
@@ -478,7 +448,6 @@ def save_rejected(name, new_urls):
                 "pinned": False, "rejected": True, "applied": False,
                 "stage": "", "salary": "", "location": "", "match": "",
             }
-    # Write back via save_history with empty jobs list
     path = history_path(name)
     reject_cutoff = today - datetime.timedelta(days=REJECT_DAYS)
     cutoff = today - datetime.timedelta(days=HISTORY_WEEKS * 7)
@@ -509,12 +478,6 @@ def save_rejected(name, new_urls):
 # 🔧 PRE-FILTERS
 # =============================================================================
 
-# =============================================================================
-# 🔧 PRE-FILTERS
-# =============================================================================
-
-# Known wrong-city signals — explicit non-remote locations not in any ok_cities list
-# Only used when strict location checking is needed
 WRONG_CITY_SIGNALS = [
     "new york", "chicago", "boston", "austin", "denver", "atlanta",
     "dallas", "houston", "miami", "philadelphia", "phoenix", "portland",
@@ -524,7 +487,6 @@ WRONG_CITY_SIGNALS = [
 
 
 def check_exclusion_filter(job, profile=None):
-    """Returns (passes: bool, reason: str)"""
     title   = job.get("title", "").lower()
     snippet = job.get("snippet", "").lower()
     for kw in EXCLUDE_TITLE_KEYWORDS:
@@ -533,7 +495,6 @@ def check_exclusion_filter(job, profile=None):
     for kw in EXCLUDE_SNIPPET_KEYWORDS:
         if kw.lower() in snippet:
             return False, f"snippet contains '{kw}'"
-    # Per-profile required title keywords (Vanessa + Maryjane)
     if profile:
         required = profile.get("required_title_keywords", [])
         if required and not any(kw.lower() in title for kw in required):
@@ -542,36 +503,21 @@ def check_exclusion_filter(job, profile=None):
 
 
 def check_location_filter(job, profile):
-    """
-    Returns (passes: bool, reason: str)
-    LENIENT: only drop if a clearly wrong city is explicitly mentioned
-    AND there is no remote signal. If location is ambiguous/missing → keep.
-    """
     ok_cities = profile.get("ok_cities", [])
     if not ok_cities:
-        return True, ""   # David — no city filter
-
+        return True, ""
     text = (job.get("title", "") + " " +
             job.get("snippet", "") + " " +
             job.get("location", "")).lower()
-
     remote_signals = ["remote", "work from home", "wfh", "fully remote",
                       "100% remote", "anywhere", "distributed", "hybrid"]
-
-    # Keep if any remote signal present
     if any(sig in text for sig in remote_signals):
         return True, ""
-
-    # Keep if an ok city is mentioned
     if any(city in text for city in ok_cities):
         return True, ""
-
-    # Drop ONLY if a clearly wrong city is explicitly mentioned
     for wrong_city in WRONG_CITY_SIGNALS:
         if wrong_city in text:
             return False, f"explicit wrong city: '{wrong_city}'"
-
-    # Location ambiguous or not mentioned — keep (benefit of the doubt)
     return True, ""
 
 
@@ -586,24 +532,22 @@ def passes_location_filter(job, profile):
 
 
 def write_debug_filtered(name, dropped_jobs):
-    """Write CSV of dropped jobs with reasons for filter debugging."""
     if not DEBUG_FILTERS or not dropped_jobs:
         return
     path = HISTORY_DIR / f"debug_filtered_{name.lower()}.csv"
-    fields = ["title", "company", "url", "ats_site", "location", "snippet_preview",
-              "filter_reason"]
+    fields = ["title", "company", "url", "ats_site", "location", "snippet_preview", "filter_reason"]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for job, reason in dropped_jobs:
             writer.writerow({
-                "title":            job.get("title", "")[:80],
-                "company":          job.get("company", ""),
-                "url":              job.get("url", ""),
-                "ats_site":         job.get("ats_site", ""),
-                "location":         job.get("location", ""),
-                "snippet_preview":  job.get("snippet", "")[:120],
-                "filter_reason":    reason,
+                "title":           job.get("title", "")[:80],
+                "company":         job.get("company", ""),
+                "url":             job.get("url", ""),
+                "ats_site":        job.get("ats_site", ""),
+                "location":        job.get("location", ""),
+                "snippet_preview": job.get("snippet", "")[:120],
+                "filter_reason":   reason,
             })
     print(f"    🔍 Debug: {len(dropped_jobs)} filtered jobs written to {path.name}")
 
@@ -683,45 +627,23 @@ def extract_company(result, site, url):
 
 
 def extract_salary(text):
-    """
-    Extract salary range or single value from text.
-    Handles: $XXX,XXX | $XXXXXX | $XXXK — all with dash/en-dash/em-dash/space variants and 'to'
-    Also catches ranges without $ sign (e.g. '150,000 – 180,000')
-    """
-    # Separator: dash, en-dash, em-dash, or 'to' — with optional surrounding spaces
     SEP = r'\s*(?:[-\u2013\u2014]|to)\s*'
-
-    # Token: $XXX,XXX or $XXXXXX or $XXXK (with optional $)
-    T_DOLLAR  = r'\$\d{1,3}(?:,\d{3})+'   # $150,000
-    T_NODOT   = r'\$\d{4,7}'              # $150000
-    T_K       = r'\$\d{2,3}[kK]'          # $150K
-    T_COMMA   = r'\d{1,3}(?:,\d{3})+'     # 150,000 (no $)
-
+    T_DOLLAR  = r'\$\d{1,3}(?:,\d{3})+'
+    T_NODOT   = r'\$\d{4,7}'
+    T_K       = r'\$\d{2,3}[kK]'
+    T_COMMA   = r'\d{1,3}(?:,\d{3})+'
     TOKEN = f'(?:{T_DOLLAR}|{T_NODOT}|{T_K}|{T_COMMA})'
     RANGE = TOKEN + SEP + TOKEN
-
-    # 1. Full range match (highest priority)
     m = re.search(RANGE, text, re.IGNORECASE)
-    if m:
-        return m.group(0).strip()
-
-    # 2. Single $XXX,XXX
-    m = re.search(r'\$\d{1,3}(?:,\d{3})+(?:\s*(?:/yr|/year|annually))?',
-                  text, re.IGNORECASE)
     if m: return m.group(0).strip()
-
-    # 3. Single $XXXXXX (no comma)
+    m = re.search(r'\$\d{1,3}(?:,\d{3})+(?:\s*(?:/yr|/year|annually))?', text, re.IGNORECASE)
+    if m: return m.group(0).strip()
     m = re.search(r'\$\d{5,7}(?:\s*(?:/yr|/year|annually))?', text, re.IGNORECASE)
     if m: return m.group(0).strip()
-
-    # 4. Single $XXXK
     m = re.search(r'\$\d{2,3}[kK](?:\+)?', text)
     if m: return m.group(0).strip()
-
-    # 5. Hourly
     m = re.search(r'\$\d{2,3}(?:\.\d{2})?\s*/\s*h(?:r|our)', text, re.IGNORECASE)
     if m: return m.group(0).strip()
-
     return ""
 
 
@@ -753,23 +675,14 @@ def extract_location(text):
 
 
 def fetch_job_page(url):
-    """
-    Fetch job page. Priority: JSON-LD structured data → text regex fallback.
-    Returns (salary, location, remote, date_posted).
-    """
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                                   "Chrome/120.0.0.0 Safari/537.36"}
         r    = requests.get(url, headers=headers, timeout=8)
         html = r.text
+        salary = location = remote = date_posted = ""
 
-        salary      = ""
-        location    = ""
-        remote      = ""
-        date_posted = ""
-
-        # JSON-LD parsing
         json_ld_blocks = re.findall(
             r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
             html, re.DOTALL | re.IGNORECASE
@@ -783,10 +696,8 @@ def fetch_job_page(url):
                 for item in items:
                     if not isinstance(item, dict): continue
                     job_type = item.get("@type", "")
-                    if "JobPosting" not in (job_type if isinstance(job_type, str)
-                                            else " ".join(job_type)):
+                    if "JobPosting" not in (job_type if isinstance(job_type, str) else " ".join(job_type)):
                         continue
-                    # Date posted
                     if not date_posted:
                         dp = item.get("datePosted", "")
                         if dp:
@@ -795,7 +706,6 @@ def fetch_job_page(url):
                                 date_posted = d.strftime("%b %d, %Y")
                             except ValueError:
                                 date_posted = dp[:10]
-                    # Location
                     if not location:
                         jl   = item.get("jobLocation", {})
                         if isinstance(jl, list): jl = jl[0] if jl else {}
@@ -804,12 +714,10 @@ def fetch_job_page(url):
                             city  = addr.get("addressLocality", "")
                             state = addr.get("addressRegion", "")
                             if city: location = f"{city}, {state}".strip(", ")
-                    # Remote
                     if not remote:
                         wl = str(item.get("jobLocationType", "")).lower()
                         if "remote" in wl or "telecommute" in wl:
                             remote = "Remote"
-                    # Salary
                     if not salary:
                         bs = item.get("baseSalary", {})
                         if isinstance(bs, dict):
@@ -820,12 +728,12 @@ def fetch_job_page(url):
                                 period = str(val.get("unitText", "")).upper()
                                 if mn and mx:
                                     if period in ("HOUR", "HR"):
-                                        salary = f"${mn}–${mx}/hr"
+                                        salary = f"${mn}\u2013${mx}/hr"
                                     else:
                                         try:
-                                            salary = f"${int(float(mn)):,}–${int(float(mx)):,}"
+                                            salary = f"${int(float(mn)):,}\u2013${int(float(mx)):,}"
                                         except (ValueError, TypeError):
-                                            salary = f"${mn}–${mx}"
+                                            salary = f"${mn}\u2013${mx}"
                                 elif mn:
                                     try: salary = f"${int(float(mn)):,}+"
                                     except: salary = f"${mn}+"
@@ -833,12 +741,9 @@ def fetch_job_page(url):
             except (json.JSONDecodeError, Exception):
                 continue
 
-        # Text fallback — scan BOTH head (for location/remote/date) and tail (for salary)
-        # Salary almost always appears at the bottom of job descriptions
-        head_html = html[:5000]
-        tail_html = html[-6000:]   # Last 6000 chars catches compensation sections
+        head_html  = html[:5000]
+        tail_html  = html[-6000:]
 
-        # Strip tags from both sections
         def clean_html(raw):
             c = re.sub(r'<[^>]+>', ' ', raw)
             return re.sub(r'\s+', ' ', c)
@@ -851,21 +756,14 @@ def fetch_job_page(url):
         if not remote:   remote   = extract_remote(full_clean)
 
         if not salary:
-            # Strategy 1: Compensation/Salary label proximity — scan 400 chars after label
-            # then run full salary extraction on that window
             prox_match = re.search(
-                r'(?:compensation|salary range|base pay|pay range|total comp|pay:)'
-                r'(.{0,400})',
+                r'(?:compensation|salary range|base pay|pay range|total comp|pay:)(.{0,400})',
                 tail_clean, re.IGNORECASE | re.DOTALL
             )
             if prox_match:
                 salary = extract_salary(prox_match.group(1))
-
-            # Strategy 2: General regex on tail (catches bottom-of-page salary)
             if not salary:
                 salary = extract_salary(tail_clean)
-
-            # Strategy 3: General regex on head (catches top/sidebar salary)
             if not salary:
                 salary = extract_salary(head_clean)
 
@@ -888,30 +786,22 @@ def check_syndication(title, company):
 
 
 # =============================================================================
-# 🔧 RELEVANCE SCORING — title 80% / seniority 7% / location 13%
-# Strong ≥ 20 / Good ≥ 10 / Possible < 10
+# 🔧 RELEVANCE SCORING
 # =============================================================================
 
 def score_job(job, profile):
     title   = job["title"].lower()
     score   = 0.0
     reasons = []
-
-    # Title — 80% = 24 pts max
     hits        = [t for t in profile["priority_titles"] if t in title]
     title_score = min(24.0, len(hits) * 9.0)
     score      += title_score
     if hits: reasons.append(f"title: {', '.join(hits[:2])}")
-
-    # Seniority — 7% = 2.1 pts max
     sen_terms = ["director","vp","vice president","chief","svp","avp",
                  "senior","lead","principal","head of","executive"]
     sen_hits  = [t for t in sen_terms if t in title]
     score    += min(2.1, len(sen_hits) * 2.1)
     if sen_hits: reasons.append(f"level: {sen_hits[0]}")
-
-    # Location — 13% = 3.9 pts max
-    pref      = profile.get("location_preference", "").lower()
     remote    = job.get("remote", "In-person").lower()
     loc       = job.get("location", "").lower()
     ok_cities = [c.lower() for c in profile.get("ok_cities", [])]
@@ -919,15 +809,14 @@ def score_job(job, profile):
     if not profile.get("ok_cities"):
         ls = 2.0
     elif "remote" in remote:
-        ls = 3.9; reasons.append("remote ✓")
+        ls = 3.9; reasons.append("remote \u2713")
     elif "hybrid" in remote or "in-range" in remote:
-        ls = 2.5; reasons.append(f"{remote} ✓")
+        ls = 2.5; reasons.append(f"{remote} \u2713")
     elif any(city in loc for city in ok_cities):
-        ls = 3.9; reasons.append("city ✓")
+        ls = 3.9; reasons.append("city \u2713")
     score += ls
     score  = round(score, 1)
-
-    label = "🟢 Strong" if score >= 20 else "🟡 Good" if score >= 10 else "🔵 Possible"
+    label = "\U0001f7e2 Strong" if score >= 20 else "\U0001f7e1 Good" if score >= 10 else "\U0001f535 Possible"
     job["relevance_score"]   = score
     job["relevance_label"]   = label
     job["relevance_reasons"] = reasons
@@ -935,15 +824,13 @@ def score_job(job, profile):
 
 
 # =============================================================================
-# 🔧 SECTION LOGIC — age-based (7 days) replaces seen_before for Sec 1/2
+# 🔧 SECTION LOGIC
 # =============================================================================
 
 def is_just_posted(job):
-    """True if date_posted is within JUST_POSTED_DAYS of today."""
     dp = job.get("date_posted", "")
     if not dp:
         return False
-    # Try to parse various date formats from the page fetch
     for fmt in ("%b %d, %Y", "%Y-%m-%d", "%B %d, %Y"):
         try:
             d = datetime.datetime.strptime(dp.strip(), fmt).date()
@@ -959,33 +846,21 @@ def get_job_section(job, prev_user_data):
     today      = datetime.date.today()
     first_seen = job.get("first_seen_date", today)
     age_days   = (today - first_seen).days
-
-    # Pinned overrides everything
     if normalize_bool(prev.get("pinned", "")):
         return 0
-
-    # Applied overrides section
     applied = normalize_bool(prev.get("applied_check", ""))
     dated   = bool(prev.get("date_applied", "").strip())
     if applied or dated:
         return 5
-
-    label = job.get("relevance_label", "🔵 Possible")
-
-    # Possible always goes to Section 4
-    if label == "🔵 Possible":
+    label = job.get("relevance_label", "\U0001f535 Possible")
+    if label == "\U0001f535 Possible":
         return 4
-
-    # Fresh jobs (within GEM_AGE_DAYS)
     if age_days <= GEM_AGE_DAYS:
         if job.get("unsyndicated"):
-            return 1   # Hidden Gems — takes priority over Just Posted
-        # Just Posted — syndicated but posted within 2 days
+            return 1
         if is_just_posted(job):
             return 6
-        return 2   # Open Market Picks
-
-    # Older than 7 days → Still Circulating
+        return 2
     return 3
 
 
@@ -996,10 +871,10 @@ def get_job_section(job, prev_user_data):
 def search_for_profile(profile):
     name      = profile["name"]
     sal_min   = profile.get("salary_minimum", 0)
-    history   = load_history(name)   # Now returns {url: rich_dict}
+    history   = load_history(name)
     rejected  = load_rejected(name)
     pinned_count = sum(1 for e in history.values() if e.get("pinned"))
-    print(f"\n  👤 {name} | min ${sal_min:,} | {len(history)} history | "
+    print(f"\n  \U0001f464 {name} | min ${sal_min:,} | {len(history)} history | "
           f"{pinned_count} pinned | {len(rejected)} filtered out")
 
     results, seen = [], set()
@@ -1045,9 +920,8 @@ def search_for_profile(profile):
                     "relevance_reasons": [],
                 })
 
-    raw_count   = len(results)
-    kept        = []
-    dropped     = []   # (job, reason) tuples for debug
+    raw_count = len(results)
+    kept, dropped = [], []
 
     for job in results:
         excl_pass, excl_reason = check_exclusion_filter(job, profile)
@@ -1059,8 +933,7 @@ def search_for_profile(profile):
         kept.append(job)
 
     results = kept
-    print(f"    {raw_count} found → {len(results)} after filters "
-          f"({len(dropped)} dropped)")
+    print(f"    {raw_count} found \u2192 {len(results)} after filters ({len(dropped)} dropped)")
 
     if DEBUG_FILTERS:
         write_debug_filtered(name, dropped)
@@ -1069,15 +942,14 @@ def search_for_profile(profile):
         score_job(job, profile)
 
     strong_good = [j for j in results
-                   if j["relevance_label"] in ("🟢 Strong", "🟡 Good")
+                   if j["relevance_label"] in ("\U0001f7e2 Strong", "\U0001f7e1 Good")
                    and not j["seen_before"]]
 
     if len(strong_good) > FETCH_CAP:
-        print(f"    ⚠️  {len(strong_good)} Strong/Good found — capping fetch at {FETCH_CAP} "
-              f"(top by score). Remaining marked Possible.")
+        print(f"    \u26a0\ufe0f  {len(strong_good)} Strong/Good found \u2014 capping fetch at {FETCH_CAP}.")
         strong_good.sort(key=lambda x: x["relevance_score"], reverse=True)
         for job in strong_good[FETCH_CAP:]:
-            job["relevance_label"] = "🔵 Possible"
+            job["relevance_label"] = "\U0001f535 Possible"
             job["relevance_score"] = min(job["relevance_score"], 9.9)
         strong_good = strong_good[:FETCH_CAP]
 
@@ -1092,22 +964,21 @@ def search_for_profile(profile):
         job["unsyndicated"] = not any(synd.values())
 
         pg_sal, pg_loc, pg_rem, pg_date = fetch_job_page(job["url"])
-        # Treat "n/a" and "unknown" as blank — page fetch should overwrite them
         cur_sal = job["salary"] if job["salary"] not in ("", "n/a") else ""
         cur_loc = job["location"] if job["location"] not in ("", "unknown") else ""
-        if pg_sal  and not cur_sal:                  job["salary"]      = pg_sal
-        if pg_loc  and not cur_loc:                  job["location"]    = pg_loc
-        if pg_rem  and job["remote"] in ("In-person", "🏢 In-person", ""):
-                                                     job["remote"]      = pg_rem
-        if pg_date and not job["date_posted"]:       job["date_posted"] = pg_date
+        if pg_sal  and not cur_sal:                                    job["salary"]      = pg_sal
+        if pg_loc  and not cur_loc:                                    job["location"]    = pg_loc
+        if pg_rem  and job["remote"] in ("In-person", "\U0001f3e2 In-person", ""):
+                                                                       job["remote"]      = pg_rem
+        if pg_date and not job["date_posted"]:                         job["date_posted"] = pg_date
         if pg_sal or pg_loc or pg_rem or pg_date:
-            print(f"      📄 Fetched: sal={pg_sal or '-'} loc={pg_loc or '-'} "
+            print(f"      \U0001f4c4 Fetched: sal={pg_sal or '-'} loc={pg_loc or '-'} "
                   f"rem={pg_rem or '-'} date={pg_date or '-'}")
 
         sal_val = extract_salary_value(job["salary"])
         if sal_val is not None and sal_val < sal_min:
-            print(f"      ↓ Demoted (salary {job['salary']} < ${sal_min:,})")
-            job["relevance_label"] = "🔵 Possible"
+            print(f"      \u2193 Demoted (salary {job['salary']} < ${sal_min:,})")
+            job["relevance_label"] = "\U0001f535 Possible"
             job["relevance_score"] = min(job["relevance_score"], 9.9)
 
         time.sleep(0.5)
@@ -1116,7 +987,6 @@ def search_for_profile(profile):
         if job["seen_before"]:
             job["unsyndicated"] = True
 
-    # save_history called later in update_sheet after we have prev_user_data
     return results
 
 
@@ -1126,13 +996,13 @@ def search_for_profile(profile):
 
 def normalize_bool(val):
     if isinstance(val, bool): return val
-    if isinstance(val, str):  return val.upper() in ("TRUE", "1", "YES", "✓", "X")
+    if isinstance(val, str):  return val.upper() in ("TRUE", "1", "YES", "\u2713", "X")
     return False
 
 
 def get_sheets_service():
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
-        print(f"    ⚠️  Credentials not found: {SERVICE_ACCOUNT_FILE}")
+        print(f"    \u26a0\ufe0f  Credentials not found: {SERVICE_ACCOUNT_FILE}")
         return None
     try:
         creds = service_account.Credentials.from_service_account_file(
@@ -1141,7 +1011,7 @@ def get_sheets_service():
         )
         return build("sheets", "v4", credentials=creds)
     except Exception as e:
-        print(f"    ⚠️  Sheets auth: {e}")
+        print(f"    \u26a0\ufe0f  Sheets auth: {e}")
         return None
 
 
@@ -1152,7 +1022,7 @@ def read_existing_rows(service, sheet_id):
         ).execute()
         rows = result.get("values", [])
     except Exception as e:
-        print(f"    ⚠️  Read error: {e}")
+        print(f"    \u26a0\ufe0f  Read error: {e}")
         return {}
     if len(rows) < 2:
         return {}
@@ -1162,7 +1032,6 @@ def read_existing_rows(service, sheet_id):
         while len(row) < NUM_COLS:
             row.append("")
         url = row[url_idx]
-        # Skip section header rows (no URL) and the column header row
         if not url or not url.startswith("http"):
             continue
         existing[url] = {col_name: row[idx] for col_name, idx in COL.items()}
@@ -1170,15 +1039,14 @@ def read_existing_rows(service, sheet_id):
 
 
 def remote_with_icon(val):
-    """Map remote value to icon-prefixed display string."""
     mapping = {
-        "Remote":     "🏠 Remote",
-        "In-person":  "🏢 In-person",
-        "Hybrid":     "🏠🏢 Hybrid",
-        "In-range":   "🏠 In-range",
-        "In-Person":  "🏢 In-person",
+        "Remote":     "\U0001f3e0 Remote",
+        "In-person":  "\U0001f3e2 In-person",
+        "Hybrid":     "\U0001f3e0\U0001f3e2 Hybrid",
+        "In-range":   "\U0001f3e0 In-range",
+        "In-Person":  "\U0001f3e2 In-person",
     }
-    return mapping.get(val, val or "🏢 In-person")
+    return mapping.get(val, val or "\U0001f3e2 In-person")
 
 
 def job_to_row(job, section_num, prev_user_data, today):
@@ -1195,28 +1063,21 @@ def job_to_row(job, section_num, prev_user_data, today):
     row[COL["ats_site"]]    = job.get("ats_site", "")
     row[COL["first_seen"]]  = job.get("first_seen", today)
 
-    # Salary — prefer job data, fall back to previously stored user data, then n/a
-    salary = job.get("salary", "") or prev.get("salary", "") or "n/a"
-    row[COL["salary"]] = salary
-
-    # Location — same preservation logic
+    salary   = job.get("salary", "") or prev.get("salary", "") or "n/a"
     location = job.get("location", "") or prev.get("location", "") or "unknown"
+    remote   = job.get("remote", "") or prev.get("remote", "") or "In-person"
+
+    row[COL["salary"]]   = salary
     row[COL["location"]] = location
+    row[COL["remote"]]   = remote_with_icon(remote)
 
-    # Remote — with icon prefix
-    remote = job.get("remote", "") or prev.get("remote", "") or "In-person"
-    row[COL["remote"]] = remote_with_icon(remote)
-
-    # Hidden? — Y if not syndicated, N if on major boards
     flags = []
     if job.get("on_linkedin"):  flags.append("LinkedIn")
     if job.get("on_indeed"):    flags.append("Indeed")
     if job.get("on_glassdoor"): flags.append("Glassdoor")
-    syndication = ", ".join(flags) if flags else "Not syndicated"
-    row[COL["syndication"]] = syndication
+    row[COL["syndication"]] = ", ".join(flags) if flags else "Not syndicated"
     row[COL["hidden"]]      = "Y" if not flags else "N"
 
-    # User columns — preserve existing user data
     for col_name in USER_COLS:
         val = prev.get(col_name, "")
         if col_name in ("pinned", "reject", "applied_check"):
@@ -1224,7 +1085,6 @@ def job_to_row(job, section_num, prev_user_data, today):
         else:
             row[COL[col_name]] = val
 
-    # Auto-fill date_applied if applied is checked but date is blank
     if normalize_bool(prev.get("applied_check", "")) and not prev.get("date_applied", "").strip():
         yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
         row[COL["date_applied"]] = yesterday
@@ -1245,29 +1105,25 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
     for sec in sections:
         sections[sec].sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
 
-    all_rows = [SHEET_HEADERS]
-    row_meta = []
-    blank_row    = [""] * NUM_COLS
+    all_rows      = [SHEET_HEADERS]
+    row_meta      = []
+    blank_row     = [""] * NUM_COLS
     first_section = True
 
     for sec in SECTION_ORDER:
         jobs = sections.get(sec, [])
         if not jobs:
             continue
-
-        # 2 blank spacer rows before every section except the first
         if not first_section:
             for _ in range(2):
                 all_rows.append(blank_row[:])
                 row_meta.append({"section": sec, "is_header": False,
                                  "is_overflow": False, "is_spacer": True})
         first_section = False
-
         label, _ = SECTION_LABELS[sec]
         all_rows.append([label] + [""] * (NUM_COLS - 1))
         row_meta.append({"section": sec, "is_header": True,
                          "is_overflow": False, "is_spacer": False})
-
         for i, job in enumerate(jobs):
             if not job.get("title", "").strip() or not job.get("url", "").startswith("http"):
                 continue
@@ -1279,8 +1135,7 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
                              "is_overflow": overflow, "is_spacer": False})
 
     try:
-        # First get current sheet dimensions to know what to delete
-        sheet_meta = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        sheet_meta  = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
         sheet_props = next(
             (s["properties"] for s in sheet_meta.get("sheets", [])
              if s["properties"]["sheetId"] == 0), {}
@@ -1288,42 +1143,34 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
         current_rows = sheet_props.get("gridProperties", {}).get("rowCount", 1000)
         current_cols = sheet_props.get("gridProperties", {}).get("columnCount", 26)
 
-        # Clear all values
         service.spreadsheets().values().clear(
             spreadsheetId=sheet_id, range="A:Z"
         ).execute()
-
-        # Write new data
         service.spreadsheets().values().update(
             spreadsheetId=sheet_id, range="A1",
             valueInputOption="USER_ENTERED",
             body={"values": all_rows}
         ).execute()
 
-        # Delete excess rows beyond what we wrote (eliminates ghost rows)
         rows_written = len(all_rows)
         if current_rows > rows_written + 5:
-            service.spreadsheets().batchUpdate(
-                spreadsheetId=sheet_id,
-                body={"requests": [{"deleteDimension": {
-                    "range": {"sheetId": 0, "dimension": "ROWS",
-                              "startIndex": rows_written,
-                              "endIndex": current_rows}
-                }}]}
-            ).execute()
-
-        # Delete excess columns beyond NUM_COLS (eliminates ghost columns)
+            sheets_batch_with_backoff(
+                service, sheet_id,
+                [{"deleteDimension": {"range": {"sheetId": 0, "dimension": "ROWS",
+                                                "startIndex": rows_written,
+                                                "endIndex": current_rows}}}],
+                "delete excess rows"
+            )
         if current_cols > NUM_COLS + 1:
-            service.spreadsheets().batchUpdate(
-                spreadsheetId=sheet_id,
-                body={"requests": [{"deleteDimension": {
-                    "range": {"sheetId": 0, "dimension": "COLUMNS",
-                              "startIndex": NUM_COLS,
-                              "endIndex": current_cols}
-                }}]}
-            ).execute()
+            sheets_batch_with_backoff(
+                service, sheet_id,
+                [{"deleteDimension": {"range": {"sheetId": 0, "dimension": "COLUMNS",
+                                                "startIndex": NUM_COLS,
+                                                "endIndex": current_cols}}}],
+                "delete excess columns"
+            )
 
-        print(f"    📊 Wrote {len(all_rows)-1} rows ("
+        print(f"    \U0001f4ca Wrote {len(all_rows)-1} rows ("
               f"{len(sections.get(0,[]))} pinned, "
               f"{len(sections.get(1,[]))} gems, "
               f"{len(sections.get(6,[]))} just posted, "
@@ -1332,52 +1179,24 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
               f"{len(sections.get(4,[]))} possible, "
               f"{len(sections.get(5,[]))} applied)")
     except Exception as e:
-        print(f"    ❌ Write error: {e}"); return
+        print(f"    \u274c Write error: {e}"); return
 
     apply_sheet_formatting(service, sheet_id, all_rows, row_meta)
 
 
 def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
-    """
-    Formatting v4.4:
-    - Column order updated (Date Posted + First Seen moved left)
-    - A/B color + checkbox applied in single repeatCell per row (fixes two-tone bug)
-    - Just Posted section (6) added with amber header
-    """
     batch = []
     gid   = 0
 
-    # 1. Freeze header row
     batch.append({"updateSheetProperties": {
         "properties": {"sheetId": gid, "gridProperties": {"frozenRowCount": 1}},
         "fields": "gridProperties.frozenRowCount"
     }})
 
-    # 2. Column widths — updated for new layout
     widths = {
-        0:  30,   # A — Pin
-        1:  30,   # B — Reject
-        2:  220,  # C — Title
-        3:  160,  # D — Company
-        4:  50,   # E — Match
-        5:  100,  # F — Salary
-        6:  90,   # G — Remote
-        7:  90,   # H — Location
-        8:  100,  # I — URL
-        9:  40,   # J — Hidden?
-        10: 55,   # K — Applied!
-        11: 90,   # L — Date Posted  ← moved
-        12: 90,   # M — First Seen   ← moved
-        13: 100,  # N — Date Applied
-        14: 140,  # O — Stage
-        15: 205,  # P — Notes
-        16: 100,  # Q — Date Followed Up
-        17: 140,  # R — Contact
-        18: 110,  # S — ATS Site
-        19: 130,  # T — Syndication
-        20: 120,  # U — Resume Version
-        21: 200,  # V — Cover Letter Notes
-        22: 50,   # W — Section
+        0:30, 1:30, 2:220, 3:160, 4:50, 5:100, 6:90, 7:90,
+        8:100, 9:40, 10:55, 11:90, 12:90, 13:100, 14:140,
+        15:205, 16:100, 17:140, 18:110, 19:130, 20:120, 21:200, 22:50,
     }
     for col_idx, px in widths.items():
         batch.append({"updateDimensionProperties": {
@@ -1386,7 +1205,6 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "properties": {"pixelSize": px}, "fields": "pixelSize"
         }})
 
-    # 3. Top header row — dark bg, white bold text
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1},
         "cell": {"userEnteredFormat": {
@@ -1397,8 +1215,6 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
         }},
         "fields": "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)"
     }})
-
-    # 4. Rotate text in cols A and B header
     for col_idx in [0, 1]:
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1,
@@ -1407,26 +1223,21 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "fields": "userEnteredFormat.textRotation"
         }})
 
-    # 5. Clear all data row backgrounds to white
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1},
-        "cell": {"userEnteredFormat": {
-            "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}
-        }},
+        "cell": {"userEnteredFormat": {"backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}}},
         "fields": "userEnteredFormat.backgroundColor"
     }})
 
-    # 6. Section header colors — precisely one row each
     for i, meta in enumerate(row_meta):
         sr = i + 1
-        if not meta["is_header"]:
-            continue
+        if not meta["is_header"]: continue
         sec   = meta["section"]
         color = SECTION_COLORS.get(sec, {"bg": "333333"})
         bg    = color["bg"]
-        r     = int(bg[0:2], 16) / 255
-        g     = int(bg[2:4], 16) / 255
-        b     = int(bg[4:6], 16) / 255
+        r = int(bg[0:2], 16) / 255
+        g = int(bg[2:4], 16) / 255
+        b = int(bg[4:6], 16) / 255
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1},
             "cell": {"userEnteredFormat": {
@@ -1437,47 +1248,34 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "fields": "userEnteredFormat(backgroundColor,textFormat)"
         }})
 
-    # 7. Per data row: col A (green bg + checkbox) and col B (red bg + checkbox)
-    #    Combined into single repeatCell per column per row — fixes two-tone bug
     data_rows = [i + 1 for i, m in enumerate(row_meta)
                  if not m["is_header"] and not m.get("is_spacer", False)]
-
     for sr in data_rows:
-        # Col A — green background + checkbox in ONE call
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                       "startColumnIndex": 0, "endColumnIndex": 1},
             "cell": {
-                "userEnteredFormat": {
-                    "backgroundColor": {"red": 0.88, "green": 0.96, "blue": 0.88}
-                },
+                "userEnteredFormat": {"backgroundColor": {"red": 0.88, "green": 0.96, "blue": 0.88}},
                 "dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}
             },
             "fields": "userEnteredFormat.backgroundColor,dataValidation"
         }})
-        # Col B — red background + checkbox in ONE call
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                       "startColumnIndex": 1, "endColumnIndex": 2},
             "cell": {
-                "userEnteredFormat": {
-                    "backgroundColor": {"red": 0.99, "green": 0.88, "blue": 0.88}
-                },
+                "userEnteredFormat": {"backgroundColor": {"red": 0.99, "green": 0.88, "blue": 0.88}},
                 "dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}
             },
             "fields": "userEnteredFormat.backgroundColor,dataValidation"
         }})
-        # Col K (10) — Applied! checkbox
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                       "startColumnIndex": 10, "endColumnIndex": 11},
-            "cell": {"dataValidation": {
-                "condition": {"type": "BOOLEAN"}, "showCustomUi": True
-            }},
+            "cell": {"dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}},
             "fields": "dataValidation"
         }})
 
-    # 8. Stage dropdown col O (14)
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1,
                   "startColumnIndex": COL["stage"], "endColumnIndex": COL["stage"] + 1},
@@ -1488,8 +1286,6 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
         }},
         "fields": "dataValidation"
     }})
-
-    # 9. Remote dropdown col G (6)
     batch.append({"repeatCell": {
         "range": {"sheetId": gid, "startRowIndex": 1,
                   "startColumnIndex": COL["remote"], "endColumnIndex": COL["remote"] + 1},
@@ -1500,8 +1296,6 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
         }},
         "fields": "dataValidation"
     }})
-
-    # 10. Text wrap — Notes (col P/15) and Cover Letter Notes (col V/21)
     for wrap_col in [COL["notes"], COL["cover_letter"]]:
         batch.append({"repeatCell": {
             "range": {"sheetId": gid, "startRowIndex": 1,
@@ -1510,15 +1304,10 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "fields": "userEnteredFormat.wrapStrategy"
         }})
 
-    # 11. Black font reset on text columns + grey italic for n/a / unknown
-    grey_italic = {
-        "foregroundColor": {"red": 0.6, "green": 0.6, "blue": 0.6},
-        "italic": True, "fontSize": 9
-    }
-    black_normal = {
-        "foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0},
-        "bold": False, "italic": False, "fontSize": 10
-    }
+    grey_italic  = {"foregroundColor": {"red": 0.6, "green": 0.6, "blue": 0.6},
+                    "italic": True, "fontSize": 9}
+    black_normal = {"foregroundColor": {"red": 0.0, "green": 0.0, "blue": 0.0},
+                    "bold": False, "italic": False, "fontSize": 10}
     text_cols = [COL["title"], COL["company"], COL["match"], COL["remote"],
                  COL["location"], COL["date_posted"], COL["first_seen"],
                  COL["date_applied"], COL["date_followed"], COL["contact"],
@@ -1530,46 +1319,86 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "cell": {"userEnteredFormat": {"textFormat": black_normal}},
             "fields": "userEnteredFormat.textFormat"
         }})
-
-    # Grey italic for n/a and unknown — per row, applied after black reset
     for i, meta in enumerate(row_meta):
         sr = i + 1
-        if meta["is_header"] or meta.get("is_spacer"):
-            continue
+        if meta["is_header"] or meta.get("is_spacer"): continue
         row = all_rows[sr] if sr < len(all_rows) else []
         sal = row[COL["salary"]]   if len(row) > COL["salary"]   else ""
         loc = row[COL["location"]] if len(row) > COL["location"] else ""
         if str(sal) in ("n/a", ""):
             batch.append({"repeatCell": {
                 "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
-                          "startColumnIndex": COL["salary"],
-                          "endColumnIndex": COL["salary"] + 1},
+                          "startColumnIndex": COL["salary"], "endColumnIndex": COL["salary"] + 1},
                 "cell": {"userEnteredFormat": {"textFormat": grey_italic}},
                 "fields": "userEnteredFormat.textFormat"
             }})
         if str(loc) in ("unknown", ""):
             batch.append({"repeatCell": {
                 "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
-                          "startColumnIndex": COL["location"],
-                          "endColumnIndex": COL["location"] + 1},
+                          "startColumnIndex": COL["location"], "endColumnIndex": COL["location"] + 1},
                 "cell": {"userEnteredFormat": {"textFormat": grey_italic}},
                 "fields": "userEnteredFormat.textFormat"
             }})
 
-    # Execute in chunks of 50
     def run_chunks(requests, chunk_size=50):
+        """Send batch requests in chunks with exponential backoff on 429 rate limits."""
         for i in range(0, len(requests), chunk_size):
-            chunk = requests[i:i + chunk_size]
-            try:
-                service.spreadsheets().batchUpdate(
-                    spreadsheetId=sheet_id, body={"requests": chunk}
-                ).execute()
-            except Exception as e:
-                print(f"    ⚠️  Formatting chunk error: {e}")
+            chunk   = requests[i:i + chunk_size]
+            delay   = 15
+            retries = 4
+            for attempt in range(retries):
+                try:
+                    service.spreadsheets().batchUpdate(
+                        spreadsheetId=sheet_id, body={"requests": chunk}
+                    ).execute()
+                    time.sleep(1.2)   # polite pause between chunks
+                    break
+                except HttpError as e:
+                    if e.resp.status == 429:
+                        if attempt < retries - 1:
+                            print(f"    \u23f3 Rate limit — waiting {delay}s...")
+                            time.sleep(delay)
+                            delay *= 2
+                        else:
+                            print(f"    \u26a0\ufe0f  Chunk failed after {retries} retries")
+                    else:
+                        print(f"    \u26a0\ufe0f  Formatting chunk error: {e}")
+                        break
+                except Exception as e:
+                    print(f"    \u26a0\ufe0f  Formatting chunk error: {e}")
+                    break
 
     run_chunks(batch)
-    print(f"    🎨 Formatting applied")
+    print(f"    \U0001f3a8 Formatting applied")
     create_filter_views(service, sheet_id, gid)
+
+
+def sheets_batch_with_backoff(service, sheet_id, requests_body, label=""):
+    """Execute a batchUpdate with exponential backoff on 429."""
+    delay   = 15
+    retries = 4
+    for attempt in range(retries):
+        try:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id, body={"requests": requests_body}
+            ).execute()
+            return True
+        except HttpError as e:
+            if e.resp.status == 429:
+                if attempt < retries - 1:
+                    print(f"    \u23f3 Rate limit{' (' + label + ')' if label else ''} — waiting {delay}s...")
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    print(f"    \u26a0\ufe0f  {label or 'batchUpdate'} failed after {retries} retries")
+                    return False
+            else:
+                print(f"    \u26a0\ufe0f  {label or 'batchUpdate'} error: {e}")
+                return False
+        except Exception as e:
+            print(f"    \u26a0\ufe0f  {label or 'batchUpdate'} error: {e}")
+            return False
+    return False
 
 
 def create_filter_views(service, sheet_id, gid):
@@ -1580,163 +1409,118 @@ def create_filter_views(service, sheet_id, gid):
         info   = next((s for s in sheets if s["properties"]["sheetId"] == gid), None)
         if info:
             del_ids = [fv["filterViewId"] for fv in info.get("filterViews", [])
-                       if fv.get("title", "").startswith("🔍")]
+                       if fv.get("title", "").startswith("\U0001f50d")]
             if del_ids:
-                service.spreadsheets().batchUpdate(
-                    spreadsheetId=sheet_id,
-                    body={"requests": [{"deleteFilterView": {"filterId": fid}}
-                                       for fid in del_ids]}
-                ).execute()
+                sheets_batch_with_backoff(
+                    service, sheet_id,
+                    [{"deleteFilterView": {"filterId": fid}} for fid in del_ids],
+                    "delete filter views"
+                )
     except Exception:
         pass
-
     filter_views = [
-        {"title": "🔍 Pinned",        "col": COL["pinned"],      "type": "CUSTOM_FORMULA",  "val": "=$A2=TRUE"},
-        {"title": "🔍 Strong Matches","col": COL["match"],       "type": "TEXT_CONTAINS",   "val": "Strong"},
-        {"title": "🔍 New This Run",  "col": COL["first_seen"],  "type": "TEXT_EQ",         "val": today},
-        {"title": "🔍 Applied",       "col": COL["section"],     "type": "TEXT_EQ",         "val": "5"},
+        {"title": "\U0001f50d Pinned",       "col": COL["pinned"],     "type": "CUSTOM_FORMULA", "val": "=$A2=TRUE"},
+        {"title": "\U0001f50d Strong Matches","col": COL["match"],      "type": "TEXT_CONTAINS",  "val": "Strong"},
+        {"title": "\U0001f50d New This Run",  "col": COL["first_seen"], "type": "TEXT_EQ",        "val": today},
+        {"title": "\U0001f50d Applied",       "col": COL["section"],    "type": "TEXT_EQ",        "val": "5"},
     ]
-    requests = []
+    requests_body = []
     for fv in filter_views:
-        requests.append({"addFilterView": {"filter": {
+        requests_body.append({"addFilterView": {"filter": {
             "title": fv["title"],
             "range": {"sheetId": gid, "startRowIndex": 0,
                       "startColumnIndex": 0, "endColumnIndex": NUM_COLS},
             "filterSpecs": [{"columnIndex": fv["col"], "filterCriteria": {
-                "condition": {"type": fv["type"],
-                              "values": [{"userEnteredValue": fv["val"]}]}
+                "condition": {"type": fv["type"], "values": [{"userEnteredValue": fv["val"]}]}
             }}]
         }}})
-    try:
-        service.spreadsheets().batchUpdate(
-            spreadsheetId=sheet_id, body={"requests": requests}
-        ).execute()
-        print(f"    🔍 Filter views created")
-    except Exception as e:
-        print(f"    ⚠️  Filter view error: {e}")
+    if sheets_batch_with_backoff(service, sheet_id, requests_body, "create filter views"):
+        print(f"    \U0001f50d Filter views created")
 
 
 def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
     if not SHEETS_ENABLED: return
     sheet_id = SHEET_IDS.get(name, "")
     if not sheet_id or not sheet_id.strip():
-        print(f"    ⚠️  No Sheet ID for {name}"); return
+        print(f"    \u26a0\ufe0f  No Sheet ID for {name}"); return
     service = get_sheets_service()
     if not service: return
 
-    # Save newly rejected URLs
     if new_rejected_urls:
         save_rejected(name, new_rejected_urls)
-        print(f"    🚫 {len(new_rejected_urls)} URLs added to reject list")
+        print(f"    \U0001f6ab {len(new_rejected_urls)} URLs added to reject list")
 
     current_urls = {j["url"] for j in all_jobs}
     rejected     = load_rejected(name)
     history      = load_history(name)
 
-    # Resurrect pinned jobs from enriched history — the single source of truth
     for url, h in history.items():
-        if url in current_urls or url in rejected:
-            continue
-        if not h.get("pinned"):
-            continue
-        # This URL was previously pinned — resurrect it
+        if url in current_urls or url in rejected: continue
+        if not h.get("pinned"): continue
         fs = h.get("first_seen_date", datetime.date.today() - datetime.timedelta(days=8))
         revived = {
-            "title":           h.get("title", ""),
-            "company":         h.get("company", ""),
-            "url":             url,
-            "ats_site":        h.get("ats_site", ""),
-            "keywords":        "",
-            "snippet":         "",
-            "salary":          h.get("salary", ""),
-            "remote":          "",
-            "location":        h.get("location", ""),
-            "date_posted":     "",
-            "seen_before":     True,
-            "first_seen_date": fs,
-            "first_seen":      fs.isoformat() if hasattr(fs, "isoformat") else str(fs),
-            "on_linkedin":     False,
-            "on_indeed":       False,
-            "on_glassdoor":    False,
-            "unsyndicated":    True,
-            "relevance_score": 0.0,
-            "relevance_label": h.get("match", "🔵 Possible") or "🔵 Possible",
+            "title": h.get("title",""), "company": h.get("company",""),
+            "url": url, "ats_site": h.get("ats_site",""),
+            "keywords": "", "snippet": "",
+            "salary": h.get("salary",""), "remote": "",
+            "location": h.get("location",""), "date_posted": "",
+            "seen_before": True, "first_seen_date": fs,
+            "first_seen": fs.isoformat() if hasattr(fs, "isoformat") else str(fs),
+            "on_linkedin": False, "on_indeed": False, "on_glassdoor": False,
+            "unsyndicated": True, "relevance_score": 0.0,
+            "relevance_label": h.get("match", "\U0001f535 Possible") or "\U0001f535 Possible",
             "relevance_reasons": [],
         }
         all_jobs.append(revived)
         current_urls.add(url)
-        # Ensure pinned state is in prev_user_data
-        if url not in prev_user_data:
-            prev_user_data[url] = {}
+        if url not in prev_user_data: prev_user_data[url] = {}
         prev_user_data[url]["pinned"] = "TRUE"
-        print(f"    📌 Resurrected: {h.get('title','')[:55]}")
+        print(f"    \U0001f4cc Resurrected: {h.get('title','')[:55]}")
 
-    # Handle other dropped jobs from sheet (applied or has user data)
     for url, p in prev_user_data.items():
-        if url in current_urls or url in rejected:
-            continue
+        if url in current_urls or url in rejected: continue
         is_pinned  = normalize_bool(p.get("pinned", ""))
         is_applied = normalize_bool(p.get("applied_check", "")) or bool(p.get("date_applied","").strip())
         has_data   = any(str(p.get(c, "")).strip() for c in USER_COLS
                          if c not in ("pinned", "reject", "applied_check"))
         if is_pinned or is_applied or has_data:
-            label = p.get("match", "🔵 Possible") or "🔵 Possible"
-            try:
-                fs = datetime.date.fromisoformat(p.get("first_seen", "")[:10])
-            except (ValueError, TypeError):
-                fs = datetime.date.today() - datetime.timedelta(days=8)
+            label = p.get("match", "\U0001f535 Possible") or "\U0001f535 Possible"
+            try: fs = datetime.date.fromisoformat(p.get("first_seen", "")[:10])
+            except: fs = datetime.date.today() - datetime.timedelta(days=8)
             revived = {
-                "title":           p.get("title", ""),
-                "company":         p.get("company", ""),
-                "url":             url,
-                "ats_site":        p.get("ats_site", ""),
-                "keywords":        "",
-                "snippet":         "",
-                "salary":          p.get("salary", ""),
-                "remote":          p.get("remote", ""),
-                "location":        p.get("location", ""),
-                "date_posted":     "",
-                "seen_before":     True,
-                "first_seen_date": fs,
-                "first_seen":      p.get("first_seen", ""),
-                "on_linkedin":     False,
-                "on_indeed":       False,
-                "on_glassdoor":    False,
-                "unsyndicated":    is_pinned,
+                "title": p.get("title",""), "company": p.get("company",""),
+                "url": url, "ats_site": p.get("ats_site",""),
+                "keywords": "", "snippet": "",
+                "salary": p.get("salary",""), "remote": p.get("remote",""),
+                "location": p.get("location",""), "date_posted": "",
+                "seen_before": True, "first_seen_date": fs,
+                "first_seen": p.get("first_seen",""),
+                "on_linkedin": False, "on_indeed": False, "on_glassdoor": False,
+                "unsyndicated": is_pinned,
                 "relevance_score": float(p.get("relevance_score", 0) or 0),
-                "relevance_label": label,
-                "relevance_reasons": [],
+                "relevance_label": label, "relevance_reasons": [],
             }
             all_jobs.append(revived)
             current_urls.add(url)
             if not is_pinned and not is_applied:
                 prev_user_data[url]["stage"] = "Expired?"
 
-    # Deduplicate and validate — exclude rejected jobs
     seen_urls = set()
     deduped   = []
     for job in all_jobs:
         url = job.get("url", "")
-        if not url or not url.startswith("http") or url in seen_urls:
-            continue
-        # Drop rejected jobs — they should not appear in sheet
-        if url in rejected:
-            seen_urls.add(url)
-            continue
+        if not url or not url.startswith("http") or url in seen_urls: continue
+        if url in rejected: seen_urls.add(url); continue
         seen_urls.add(url)
-        if not job.get("relevance_label"):
-            job["relevance_label"] = "🔵 Possible"
-        # Skip jobs with no title at all (true ghost rows)
-        if not job.get("title", "").strip():
-            continue
+        if not job.get("relevance_label"): job["relevance_label"] = "\U0001f535 Possible"
+        if not job.get("title", "").strip(): continue
         deduped.append(job)
 
-    # Save enriched history with current user state
     pinned_saved = save_history(name, deduped, prev_user_data, new_rejected_urls)
     if pinned_saved:
-        print(f"    📌 {pinned_saved} pinned jobs saved in history")
+        print(f"    \U0001f4cc {pinned_saved} pinned jobs saved in history")
 
-    print(f"    📋 Writing {len(deduped)} jobs to sheet")
+    print(f"    \U0001f4cb Writing {len(deduped)} jobs to sheet")
     rewrite_sheet(service, sheet_id, name, deduped, prev_user_data)
 
 
@@ -1745,23 +1529,23 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
 # =============================================================================
 
 def build_email_html(profile, gems, just_posted):
-    name     = profile["name"]
-    date_str = datetime.date.today().strftime("%B %d, %Y")
-    sheet_id = SHEET_IDS.get(name, "")
+    name      = profile["name"]
+    date_str  = datetime.date.today().strftime("%B %d, %Y")
+    sheet_id  = SHEET_IDS.get(name, "")
     sheet_url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
                  if sheet_id and sheet_id.strip() else "")
 
     def rbadge(val):
-        c = {"🏠 Remote":    ("#dcfce7","#166534"),
-             "🏠🏢 Hybrid":  ("#fef9c3","#92400e"),
-             "🏠 In-range":  ("#eff6ff","#1e40af"),
-             "🏢 In-person": ("#fee2e2","#991b1b")}
+        c = {"\U0001f3e0 Remote":    ("#dcfce7","#166534"),
+             "\U0001f3e0\U0001f3e2 Hybrid": ("#fef9c3","#92400e"),
+             "\U0001f3e0 In-range":  ("#eff6ff","#1e40af"),
+             "\U0001f3e2 In-person": ("#fee2e2","#991b1b")}
         bg, fg = c.get(val, ("#f3f4f6","#6b7280"))
         return (f'<span style="background:{bg};color:{fg};padding:1px 7px;'
                 f'border-radius:10px;font-size:11px;font-weight:600;">{val}</span>')
 
     def mbadge(label):
-        c = {"🟢 Strong":("#dcfce7","#166534"),"🟡 Good":("#fef9c3","#92400e")}
+        c = {"\U0001f7e2 Strong":("#dcfce7","#166534"),"\U0001f7e1 Good":("#fef9c3","#92400e")}
         bg, fg = c.get(label, ("#f3f4f6","#6b7280"))
         return (f'<span style="background:{bg};color:{fg};padding:1px 8px;'
                 f'border-radius:10px;font-size:11px;font-weight:700;">{label}</span>')
@@ -1772,7 +1556,7 @@ def build_email_html(profile, gems, just_posted):
         date_p   = job.get("date_posted", "")
         date_html = (f'<span style="font-size:11px;color:#9ca3af;margin-left:8px;">'
                      f'Posted: {date_p}</span>') if date_p else ""
-        remote   = job.get("remote", "") or "🏢 In-person"
+        remote   = job.get("remote", "") or "\U0001f3e2 In-person"
         return f"""
         <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;
                     margin-bottom:10px;background:#fff;">
@@ -1780,9 +1564,9 @@ def build_email_html(profile, gems, just_posted):
             {mbadge(job['relevance_label'])}
             <span style="background:#eff6ff;color:#1e40af;padding:1px 8px;
                          border-radius:10px;font-size:12px;font-weight:600;
-                         margin-right:4px;">💰 {sal}</span>
+                         margin-right:4px;">\U0001f4b0 {sal}</span>
             {rbadge(remote)}
-            <span style="font-size:12px;color:#6b7280;margin-left:6px;">📍 {loc}</span>
+            <span style="font-size:12px;color:#6b7280;margin-left:6px;">\U0001f4cd {loc}</span>
             {date_html}
           </div>
           <div style="margin-bottom:5px;">
@@ -1791,41 +1575,40 @@ def build_email_html(profile, gems, just_posted):
                       text-decoration:underline;">{job['title']}</a>
           </div>
           <div style="font-size:13px;color:#374151;margin-bottom:4px;">
-            🏢 {job['company']}
+            \U0001f3e2 {job['company']}
           </div>
           <div style="font-size:13px;color:#4b5563;line-height:1.5;">
             {job.get('snippet','')}
           </div>
         </div>"""
 
-    gems_html = ("\n".join(card(j) for j in gems)
-                 if gems else
+    gems_html = ("\n".join(card(j) for j in gems) if gems else
                  "<p style='color:#9ca3af;font-size:13px;font-style:italic;'>"
-                 "No new hidden gems this run — check your tracker for the full list.</p>")
+                 "No new hidden gems this run \u2014 check your tracker for the full list.</p>")
 
     sheet_btn = ""
     if sheet_url:
         sheet_btn = (f'<div style="background:#f0f9ff;border:1px solid #bae6fd;'
                      f'border-radius:8px;padding:12px 16px;margin:12px 0;">'
                      f'<div style="font-size:13px;color:#0369a1;margin-bottom:8px;">'
-                     f'<strong>📊 Full results in your tracker</strong> — all matches, '
+                     f'<strong>\U0001f4ca Full results in your tracker</strong> \u2014 all matches, '
                      f'pinned jobs, and application status.</div>'
                      f'<a href="{sheet_url}" style="display:inline-block;'
                      f'background:#1e3a5f;color:#fff;padding:8px 16px;border-radius:6px;'
                      f'font-size:13px;font-weight:600;text-decoration:none;">'
-                     f'Open Tracker →</a></div>')
+                     f'Open Tracker \u2192</a></div>')
 
     test_banner = ""
     if TEST_MODE:
         test_banner = ('<div style="background:#fef3c7;border:2px solid #f59e0b;'
                        'border-radius:8px;padding:10px 16px;margin-bottom:14px;'
                        'font-size:13px;color:#92400e;font-weight:600;">'
-                       '🧪 TEST MODE — routed to sender for review.</div>')
+                       '\U0001f9ea TEST MODE \u2014 routed to sender for review.</div>')
 
     label, defn = SECTION_LABELS[1]
     sec_hdr = (f'<div style="background:#166534;color:#fff;border-radius:8px;'
                f'padding:12px 16px;margin:16px 0 10px;">'
-               f'<div style="font-size:15px;font-weight:700;">{label} — {len(gems)} new</div>'
+               f'<div style="font-size:15px;font-weight:700;">{label} \u2014 {len(gems)} new</div>'
                f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">{defn}</div>'
                f'</div>')
 
@@ -1833,12 +1616,11 @@ def build_email_html(profile, gems, just_posted):
     jp_color = f"#{SECTION_COLORS[6]['bg']}"
     jp_hdr = (f'<div style="background:{jp_color};color:#fff;border-radius:8px;'
               f'padding:12px 16px;margin:20px 0 10px;">'
-              f'<div style="font-size:15px;font-weight:700;">{jp_label} — {len(just_posted)} new</div>'
+              f'<div style="font-size:15px;font-weight:700;">{jp_label} \u2014 {len(just_posted)} new</div>'
               f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">{jp_defn}</div>'
               f'</div>')
 
-    jp_html = ("\n".join(card(j) for j in just_posted)
-               if just_posted else "")
+    jp_html = "\n".join(card(j) for j in just_posted) if just_posted else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
@@ -1856,18 +1638,18 @@ def build_email_html(profile, gems, just_posted):
 <body><div class="wrap">
   {test_banner}
   <div class="hdr">
-    <h1>💎 Hidden Gems — {name}</h1>
+    <h1>\U0001f48e Hidden Gems \u2014 {name}</h1>
     <p>{date_str} &nbsp;&middot;&nbsp; {DAYS_BACK}-day search window &nbsp;&middot;&nbsp;
        {len(ALL_SOURCES)} sources</p>
   </div>
-  <div class="warning">⚠️ <strong>Verify each posting is still open before applying.</strong>
+  <div class="warning">\u26a0\ufe0f <strong>Verify each posting is still open before applying.</strong>
     Full results including all matches are in your tracker.</div>
   {sheet_btn}
   {sec_hdr}
   {gems_html}
   {jp_hdr if just_posted else ""}
   {jp_html}
-  <div class="footer">ATS Job Search · serper.dev · {date_str}</div>
+  <div class="footer">ATS Job Search &middot; serper.dev &middot; {date_str}</div>
 </div></body></html>"""
 
 
@@ -1878,7 +1660,7 @@ def build_email_html(profile, gems, just_posted):
 def send_email(to_email, to_name, html_body):
     date_str  = datetime.date.today().strftime("%b %d")
     actual_to = BCC_EMAIL if TEST_MODE else to_email
-    subject   = f"{'[TEST] ' if TEST_MODE else ''}Job Search — {to_name} · {date_str}"
+    subject   = f"{'[TEST] ' if TEST_MODE else ''}Job Search \u2014 {to_name} \u00b7 {date_str}"
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = SENDER_EMAIL
@@ -1892,10 +1674,10 @@ def send_email(to_email, to_name, html_body):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
             s.sendmail(SENDER_EMAIL, recipients, msg.as_string())
-        mode = "→ TEST" if TEST_MODE else f"→ {to_email}"
-        print(f"    📧 {to_name} {mode}")
+        mode = "\u2192 TEST" if TEST_MODE else f"\u2192 {to_email}"
+        print(f"    \U0001f4e7 {to_name} {mode}")
     except Exception as e:
-        print(f"    ❌ Email failed for {to_name}: {e}")
+        print(f"    \u274c Email failed for {to_name}: {e}")
 
 
 # =============================================================================
@@ -1903,64 +1685,57 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n🔍 ATS Job Search v4.4.2")
+    print(f"\n\U0001f50d ATS Job Search v4.4.3")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
           f"TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
 
     if not SERPER_API_KEY:
-        print("❌ SERPER_API_KEY missing from .env"); return
+        print("\u274c SERPER_API_KEY missing from .env"); return
     if not SENDER_APP_PASSWORD:
-        print("❌ SENDER_APP_PASSWORD missing from .env"); return
+        print("\u274c SENDER_APP_PASSWORD missing from .env"); return
     if not SENDER_EMAIL:
-        print("❌ SENDER_EMAIL missing from .env"); return
+        print("\u274c SENDER_EMAIL missing from .env"); return
 
     profiles_to_run = PROFILES[:1] if TEST_PROFILE_ONLY else PROFILES
 
     for profile in profiles_to_run:
-        name = profile["name"]
-
-        # Read sheet first to get rejected checkboxes from prior run
+        name     = profile["name"]
         sheet_id = SHEET_IDS.get(name, "")
-        prev_user_data   = {}
+        prev_user_data    = {}
         new_rejected_urls = []
 
         if SHEETS_ENABLED and sheet_id and sheet_id.strip():
             service = get_sheets_service()
             if service:
                 prev_user_data = read_existing_rows(service, sheet_id)
-                print(f"    📖 Read {len(prev_user_data)} existing rows from sheet")
+                print(f"    \U0001f4d6 Read {len(prev_user_data)} existing rows from sheet")
                 for url, p in prev_user_data.items():
                     if normalize_bool(p.get("reject", "")):
                         new_rejected_urls.append(url)
                 if new_rejected_urls:
-                    print(f"    🚫 {len(new_rejected_urls)} newly rejected jobs found in sheet")
+                    print(f"    \U0001f6ab {len(new_rejected_urls)} newly rejected jobs found in sheet")
             else:
-                print(f"    ⚠️  Could not connect to Google Sheets — sheet will not update")
+                print(f"    \u26a0\ufe0f  Could not connect to Google Sheets \u2014 sheet will not update")
         elif not sheet_id:
-            print(f"    ⚠️  No Sheet ID configured for {name}")
+            print(f"    \u26a0\ufe0f  No Sheet ID configured for {name}")
 
         results = search_for_profile(profile)
-
-        # Bucket for email
-        today = datetime.date.today()
-        def age_days(job):
-            return (today - job.get("first_seen_date", today)).days
+        today   = datetime.date.today()
+        sal_min = profile.get("salary_minimum", 0)
 
         gems = sorted(
             [j for j in results
-             if j["relevance_label"] in ("🟢 Strong", "🟡 Good")
+             if j["relevance_label"] in ("\U0001f7e2 Strong", "\U0001f7e1 Good")
              and not j["seen_before"]
              and j["unsyndicated"]
              and (today - j.get("first_seen_date", today)).days <= GEM_AGE_DAYS],
             key=lambda x: x["relevance_score"], reverse=True
         )
-
-        # Just Posted — syndicated Strong/Good, posted within 2 days, not already a gem
         gem_urls = {j["url"] for j in gems}
         just_posted = sorted(
             [j for j in results
-             if j["relevance_label"] in ("🟢 Strong", "🟡 Good")
+             if j["relevance_label"] in ("\U0001f7e2 Strong", "\U0001f7e1 Good")
              and not j["seen_before"]
              and not j["unsyndicated"]
              and j["url"] not in gem_urls
@@ -1968,19 +1743,48 @@ def main():
             key=lambda x: x["relevance_score"], reverse=True
         )
 
+        # Email-priority deep fetch — ensure Hidden Gems + Just Posted have max data
+        # These are the highest-value jobs; fetch any still missing salary or location
+        email_jobs = gems + just_posted
+        needs_fetch = [j for j in email_jobs
+                       if not j.get("salary") or j.get("salary") == "n/a"
+                       or not j.get("location") or j.get("location") == "unknown"
+                       or not j.get("date_posted")]
+        if needs_fetch:
+            print(f"    🔎 Email-priority fetch for {len(needs_fetch)} gems/just-posted missing data...")
+            for job in needs_fetch:
+                pg_sal, pg_loc, pg_rem, pg_date = fetch_job_page(job["url"])
+                cur_sal = job.get("salary", "") if job.get("salary") not in ("", "n/a") else ""
+                cur_loc = job.get("location", "") if job.get("location") not in ("", "unknown") else ""
+                if pg_sal  and not cur_sal:  job["salary"]      = pg_sal
+                if pg_loc  and not cur_loc:  job["location"]    = pg_loc
+                if pg_rem  and job.get("remote") in ("In-person", "\U0001f3e2 In-person", ""):
+                                             job["remote"]      = pg_rem
+                if pg_date and not job.get("date_posted"): job["date_posted"] = pg_date
+                # Re-check salary minimum after fetch
+                sal_val = extract_salary_value(job.get("salary", ""))
+                if sal_val is not None and sal_val < sal_min:
+                    print(f"      \u2193 Gem demoted post-fetch (salary {job['salary']} < ${sal_min:,})")
+                    job["relevance_label"] = "\U0001f535 Possible"
+                    job["relevance_score"] = min(job.get("relevance_score", 0), 9.9)
+                time.sleep(0.4)
+            # Rebuild lists — remove any demoted jobs
+            gems        = [j for j in gems        if j["relevance_label"] != "\U0001f535 Possible"]
+            just_posted = [j for j in just_posted if j["relevance_label"] != "\U0001f535 Possible"]
+
         if SHEETS_ENABLED:
-            print(f"    📊 Updating sheet for {name}...")
+            print(f"    \U0001f4ca Updating sheet for {name}...")
             update_sheet(name, results, prev_user_data, new_rejected_urls)
 
-        print(f"    📧 Sending email — {len(gems)} Hidden Gems, {len(just_posted)} Just Posted...")
+        print(f"    \U0001f4e7 Sending email \u2014 {len(gems)} Hidden Gems, {len(just_posted)} Just Posted...")
         html = build_email_html(profile, gems, just_posted)
         send_email(profile["email"], name, html)
         print("   Cooling down...\n")
         time.sleep(5)
 
-    print("\n✨ Done.\n")
+    print("\n\u2728 Done.\n")
     if TEST_MODE:
-        print("   ⚠️  Set TEST_MODE=False and TEST_PROFILE_ONLY=False for live send.\n")
+        print("   \u26a0\ufe0f  Set TEST_MODE=False and TEST_PROFILE_ONLY=False for live send.\n")
 
 
 if __name__ == "__main__":
