@@ -132,7 +132,7 @@ PROFILES = [
         "email": "vdegier@gmail.com",
         "salary_minimum": 180000,
         "priority_titles": ["chief", "vp", "vice president", "svp", "avp", "executive director", "senior director", "director", "head of", "lead", "principal" ],
-        "location_preference": "remote", "hybrid",
+        "location_preference": "remote", "hybrid"
         "ok_cities": ["santa rosa", "san francisco", "sonoma", "napa", "oakland", "redwood city", "hybrid"],
         "required_title_keywords": ["communications", "communication", "community", "comms", "voice", "reputation", "public relations", "corporate", "brand", "Executive", "transformation", "Change"],
         "keyword_combos": [
