@@ -131,10 +131,10 @@ PROFILES = [
         "name": "Vanessa",
         "email": "vdegier@gmail.com",
         "salary_minimum": 180000,
-        "priority_titles": ["chief", "vp", "vice president", "svp", "avp", "executive director"],
-        "location_preference": "remote",
-        "ok_cities": ["santa rosa", "san francisco", "sonoma", "napa", "oakland"],
-        "required_title_keywords": ["communications", "communication", "community", "comms", "voice", "reputation"],
+        "priority_titles": ["chief", "vp", "vice president", "svp", "avp", "executive director", "senior director", "director", "head of", "lead", "principal" ],
+        "location_preference": "remote", "hybrid",
+        "ok_cities": ["santa rosa", "san francisco", "sonoma", "napa", "oakland", "redwood city", "hybrid"],
+        "required_title_keywords": ["communications", "communication", "community", "comms", "voice", "reputation", "public relations", "corporate", "brand", "Executive", "transformation", "Change"],
         "keyword_combos": [
             ["chief communications officer"],
             ["VP", "communications", "healthcare"],
@@ -142,10 +142,13 @@ PROFILES = [
             ["executive director", "communications", "healthcare"],
             ["AVP", "communications"],
             ["chief marketing", "communications", "healthcare"],
+            ["corporate", "communications"],
+            ["executive", "communications"],
+            ["director", "communications"],
         ],
         "industry_filter": [
             "healthcare", "health system", "hospital", "life sciences",
-            "nonprofit", "medical", "science", "insurance", "clinical"
+            "nonprofit", "medical", "science", "insurance", "clinical", "pharma", "biotech", "pharmaceutical", "tech", "technology"
         ],
     },
     {
