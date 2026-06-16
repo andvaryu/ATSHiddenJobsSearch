@@ -192,7 +192,7 @@ PROFILES = [
     {
         "name": "Edith",
         "email": "emailedithyang@gmail.com",
-        "salary_minimum": 100000,
+        "salary_minimum": 90000,
         "priority_titles": ["manager", "senior manager", "director", "lead", "head of", "senior"],
         "location_preference": "remote",
         "ok_cities": ["seattle", "redmond", "bellevue", "renton", "bothell", "kirkland"],
