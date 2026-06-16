@@ -67,6 +67,7 @@ SHEET_IDS = {
     "Vanessa":  os.getenv("SHEET_ID_VANESSA", ""),
     "Maryjane": os.getenv("SHEET_ID_MARYJANE", ""),
     "David":    os.getenv("SHEET_ID_DAVID", ""),
+    "Edith":    os.getenv("SHEET_ID_EDITH", ""),
 }
 
 # =============================================================================
@@ -131,10 +132,10 @@ PROFILES = [
         "name": "Vanessa",
         "email": "vdegier@gmail.com",
         "salary_minimum": 180000,
-        "priority_titles": ["chief", "vp", "vice president", "svp", "avp", "executive director", "senior director", "director", "head of", "lead", "principal" ],
-        "location_preference": "remote", "hybrid"
-        "ok_cities": ["santa rosa", "san francisco", "sonoma", "napa", "oakland", "redwood city", "hybrid"],
-        "required_title_keywords": ["communications", "communication", "community", "comms", "voice", "reputation", "public relations", "corporate", "brand", "Executive", "transformation", "Change"],
+        "priority_titles": ["chief", "vp", "vice president", "svp", "avp", "executive director"],
+        "location_preference": "remote",
+        "ok_cities": ["santa rosa", "san francisco", "sonoma", "napa", "oakland"],
+        "required_title_keywords": ["communications", "communication", "community", "comms", "voice", "reputation"],
         "keyword_combos": [
             ["chief communications officer"],
             ["VP", "communications", "healthcare"],
@@ -142,13 +143,10 @@ PROFILES = [
             ["executive director", "communications", "healthcare"],
             ["AVP", "communications"],
             ["chief marketing", "communications", "healthcare"],
-            ["corporate", "communications"],
-            ["executive", "communications"],
-            ["director", "communications"],
         ],
         "industry_filter": [
             "healthcare", "health system", "hospital", "life sciences",
-            "nonprofit", "medical", "science", "insurance", "clinical", "pharma", "biotech", "pharmaceutical", "tech", "technology"
+            "nonprofit", "medical", "science", "insurance", "clinical"
         ],
     },
     {
@@ -190,6 +188,35 @@ PROFILES = [
             ["river hydraulics", "engineer"],
         ],
         "industry_filter": [],
+    },
+    {
+        "name": "Edith",
+        "email": "emailedithyang@gmail.com",
+        "salary_minimum": 100000,
+        "priority_titles": ["manager", "senior manager", "director", "lead", "head of", "senior"],
+        "location_preference": "remote",
+        "ok_cities": ["seattle", "redmond", "bellevue", "renton", "bothell", "kirkland"],
+        "required_title_keywords": [
+            "communications", "content", "editorial", "brand", "storytelling",
+            "social impact", "corporate social responsibility", "community"
+        ],
+        "keyword_combos": [
+            ["communications manager", "nonprofit"],
+            ["senior manager", "communications"],
+            ["content manager", "nonprofit"],
+            ["editorial manager"],
+            ["brand storytelling", "manager"],
+            ["brand communications", "manager"],
+            ["social impact", "communications"],
+            ["corporate social responsibility", "communications"],
+            ["communications manager", "foundation"],
+            ["senior communications", "manager", "nonprofit"],
+            ["content strategy", "manager", "nonprofit"],
+        ],
+        "industry_filter": [
+            "nonprofit", "foundation", "social impact", "education", "health equity",
+            "community", "public health", "advocacy", "social justice",
+        ],
     },
 ]
 
@@ -1688,7 +1715,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n\U0001f50d ATS Job Search v4.4.3")
+    print(f"\n\U0001f50d ATS Job Search v4.4.4")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
           f"TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
