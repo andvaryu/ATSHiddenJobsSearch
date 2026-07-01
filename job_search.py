@@ -192,7 +192,7 @@ PROFILES = [
     {
         "name": "Edith",
         "email": "emailedithyang@gmail.com",
-        "salary_minimum": 90000,
+        "salary_minimum": 100000,
         "priority_titles": ["manager", "senior manager", "director", "lead", "head of", "senior"],
         "location_preference": "remote",
         "ok_cities": ["seattle", "redmond", "bellevue", "renton", "bothell", "kirkland"],
@@ -1173,14 +1173,53 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
         current_rows = sheet_props.get("gridProperties", {}).get("rowCount", 1000)
         current_cols = sheet_props.get("gridProperties", {}).get("columnCount", 26)
 
-        service.spreadsheets().values().clear(
-            spreadsheetId=sheet_id, range="A:Z"
-        ).execute()
-        service.spreadsheets().values().update(
-            spreadsheetId=sheet_id, range="A1",
-            valueInputOption="USER_ENTERED",
-            body={"values": all_rows}
-        ).execute()
+        # Clear and write — these are the critical calls, must have backoff protection
+        clear_ok = False
+        delay = 15
+        for attempt in range(4):
+            try:
+                service.spreadsheets().values().clear(
+                    spreadsheetId=sheet_id, range="A:Z"
+                ).execute()
+                clear_ok = True
+                break
+            except HttpError as e:
+                if e.resp.status == 429 and attempt < 3:
+                    print(f"    ⏳ Rate limit (clear) — waiting {delay}s...")
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    raise
+
+        if not clear_ok:
+            print(f"    ❌ Could not clear sheet after retries — aborting write")
+            return
+
+        write_ok = False
+        delay = 15
+        for attempt in range(4):
+            try:
+                service.spreadsheets().values().update(
+                    spreadsheetId=sheet_id, range="A1",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": all_rows}
+                ).execute()
+                write_ok = True
+                break
+            except HttpError as e:
+                if e.resp.status == 429 and attempt < 3:
+                    print(f"    ⏳ Rate limit (write) — waiting {delay}s...")
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    raise
+
+        if not write_ok:
+            print(f"    ❌ CRITICAL: Sheet cleared but data write failed after retries. "
+                  f"Sheet may be blank — re-run the script to repopulate.")
+            return
+
+        time.sleep(1.5)   # cool-down before next API call
 
         rows_written = len(all_rows)
         if current_rows > rows_written + 5:
@@ -1551,6 +1590,9 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
         print(f"    \U0001f4cc {pinned_saved} pinned jobs saved in history")
 
     print(f"    \U0001f4cb Writing {len(deduped)} jobs to sheet")
+    if not deduped:
+        print(f"    ⚠️  No jobs to write — skipping sheet rewrite to preserve existing data")
+        return
     rewrite_sheet(service, sheet_id, name, deduped, prev_user_data)
 
 
@@ -1715,7 +1757,7 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def main():
-    print(f"\n\U0001f50d ATS Job Search v4.4.4")
+    print(f"\n\U0001f50d ATS Job Search v4.4.6")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
           f"TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
@@ -1806,11 +1848,14 @@ def main():
             print(f"    \U0001f4ca Updating sheet for {name}...")
             update_sheet(name, results, prev_user_data, new_rejected_urls)
 
-        print(f"    \U0001f4e7 Sending email \u2014 {len(gems)} Hidden Gems, {len(just_posted)} Just Posted...")
-        html = build_email_html(profile, gems, just_posted)
-        send_email(profile["email"], name, html)
-        print("   Cooling down...\n")
-        time.sleep(5)
+        if not gems and not just_posted:
+            print(f"    ⏭️  No Hidden Gems or Just Posted — skipping email for {name}")
+        else:
+            print(f"    \U0001f4e7 Sending email \u2014 {len(gems)} Hidden Gems, {len(just_posted)} Just Posted...")
+            html = build_email_html(profile, gems, just_posted)
+            send_email(profile["email"], name, html)
+        print("   Cooling down (20s — letting Sheets API quota recover)...\n")
+        time.sleep(20)
 
     print("\n\u2728 Done.\n")
     if TEST_MODE:
