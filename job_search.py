@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """
-ATS Job Search Script — v4.3
-Changes from v4.2.3:
-- Scoring: title 80% / seniority 7% / location 13%
-- Section logic: jobs stay in Sec 1/2 for 7 days by first_seen, then move to Sec 3
-- Reject column (col B): light red bg, X when checked, 90-day memory, suppresses re-surfacing
-- Pinned column (col A): light green bg
-- Applied! moved to col J (right of URL)
-- Date Posted added (from JSON-LD datePosted field)
-- Date Applied auto-assigned by script if Applied! checked but date blank
-- Stage: combined dropdown (New/Reviewing/Applied/Phone Screen/Interview/Final Round/Offer/Rejected/Pass)
-- Interview Stage column removed
-- · barrier column removed
-- Email: ATS site label removed from cards, job titles underlined as links
-- PythonAnywhere trigger endpoint for manual re-run from sheet
-- Reject memory: rejected_urls_NAME.csv, 90-day TTL
+ATS Job Search Script — v4.4.8
+Searches ATS platforms and direct employer career sites for job postings,
+cross-references against major job boards, scores by relevance, and delivers
+personalized HTML emails + Google Sheets trackers per user.
+
+Current profiles: Andy, Vanessa, Maryjane, Edith
+Sources: 17 ATS platforms + 8 direct employer sites (25 total)
+
+Key features:
+- Enriched history file (single source of truth: pinned, rejected, applied, stage)
+- Section logic: Pinned / Hidden Gems / Just Posted / Open Market / Circulating / Possible / Applied
+- Age-based section routing (7-day gem window, 2-day just-posted window)
+- Deep page fetch for Strong/Good jobs: JSON-LD → tail scan → compensation proximity search
+- Email-priority fetch ensures Hidden Gems and Just Posted have max data before sending
+- Per-profile required title keywords and salary minimums
+- Lenient location filter: drops only explicit wrong-city matches with no remote signal
+- Google Sheets: full rewrite with user data preserved, 429 rate-limit backoff
+- Watchdog email fires when zero results (likely Serper credits exhausted)
+- No email sent if no Hidden Gems or Just Posted that run
+- Sheet not rewritten if zero jobs to write (preserves existing data)
 """
 
 import csv
@@ -66,7 +71,6 @@ SHEET_IDS = {
     "Andy":     os.getenv("SHEET_ID_ANDY", ""),
     "Vanessa":  os.getenv("SHEET_ID_VANESSA", ""),
     "Maryjane": os.getenv("SHEET_ID_MARYJANE", ""),
-    "David":    os.getenv("SHEET_ID_DAVID", ""),
     "Edith":    os.getenv("SHEET_ID_EDITH", ""),
 }
 
@@ -169,25 +173,6 @@ PROFILES = [
             "healthcare", "health system", "hospital", "health plan",
             "nonprofit", "medical", "science"
         ],
-    },
-    {
-        "name": "David",
-        "email": "dvaryu@gmail.com",
-        "salary_minimum": 120000,
-        "priority_titles": ["senior", "lead", "principal", "staff", "manager"],
-        "location_preference": "",
-        "ok_cities": [],
-        "keyword_combos": [
-            ["civil engineer", "hydraulics"],
-            ["civil engineer", "geomorphology"],
-            ["civil engineer", "sedimentation"],
-            ["hydraulic engineer", "river"],
-            ["water resources", "engineer", "sedimentation"],
-            ["sediment transport", "engineer"],
-            ["dam safety", "hydraulics", "engineer"],
-            ["river hydraulics", "engineer"],
-        ],
-        "industry_filter": [],
     },
     {
         "name": "Edith",
@@ -1753,11 +1738,101 @@ def send_email(to_email, to_name, html_body):
 
 
 # =============================================================================
+# 🔧 WATCHDOG
+# =============================================================================
+
+def send_watchdog_email(profiles_run, results_summary):
+    """Alert email when zero results — likely Serper.dev credits exhausted."""
+    date_str = datetime.date.today().strftime("%B %d, %Y")
+    subject  = f"⚠️ Job Search Alert — No Results · {datetime.date.today().strftime('%b %d')}"
+
+    rows = ""
+    for name, count in results_summary.items():
+        icon  = "✅" if count > 0 else "❌"
+        color = "#166534" if count > 0 else "#991b1b"
+        bg    = "#dcfce7" if count > 0 else "#fee2e2"
+        rows += (f"<tr><td style='padding:8px 12px;font-size:13px;'>{name}</td>"
+                 f"<td style='padding:8px 12px;font-size:13px;text-align:center;"
+                 f"background:{bg};color:{color};font-weight:600;'>"
+                 f"{icon} {count} results</td></tr>")
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+             background:#f3f4f6;margin:0;padding:20px;color:#111827;">
+<div style="max-width:600px;margin:0 auto;">
+  <div style="background:#7f1d1d;color:#fff;border-radius:10px 10px 0 0;padding:22px 26px;">
+    <h1 style="margin:0 0 4px;font-size:20px;">⚠️ Job Search Run — No Results</h1>
+    <p style="margin:0;font-size:13px;opacity:0.8;">{date_str}</p>
+  </div>
+  <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;
+              padding:20px 26px;border-radius:0 0 10px 10px;">
+    <p style="font-size:14px;color:#374151;margin-top:0;">
+      The scheduled job search run completed but produced <strong>zero results</strong>
+      across all profiles. This usually means the
+      <strong>Serper.dev API credits are exhausted</strong>.
+    </p>
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;
+                  border-radius:8px;overflow:hidden;margin:16px 0;">
+      <thead>
+        <tr style="background:#1e3a5f;color:#fff;">
+          <th style="padding:8px 12px;text-align:left;font-size:12px;">Profile</th>
+          <th style="padding:8px 12px;text-align:center;font-size:12px;">Raw Results Found</th>
+        </tr>
+      </thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <p style="font-size:14px;color:#374151;"><strong>Steps to fix:</strong></p>
+    <ol style="font-size:13px;color:#374151;line-height:2;">
+      <li>Top up Serper.dev credits</li>
+      <li>Check PythonAnywhere task log for errors</li>
+      <li>Re-run the script once credits are restored</li>
+    </ol>
+    <a href="https://serper.dev/dashboard"
+       style="display:block;background:#1e3a5f;color:#fff;padding:10px 16px;
+              border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;
+              text-align:center;margin:8px 0;">
+      🔑 Top Up Serper.dev Credits →
+    </a>
+    <a href="https://www.pythonanywhere.com/user/7var6/"
+       style="display:block;background:#0369a1;color:#fff;padding:10px 16px;
+              border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;
+              text-align:center;margin:8px 0;">
+      🖥️ PythonAnywhere Task Logs →
+    </a>
+    <a href="https://claude.ai/chats"
+       style="display:block;background:#5b21b6;color:#fff;padding:10px 16px;
+              border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;
+              text-align:center;margin:8px 0;">
+      💬 Open Claude to Update Script →
+    </a>
+  </div>
+  <p style="text-align:center;color:#9ca3af;font-size:11px;padding:12px 0 0;">
+    ATS Job Search · Watchdog Alert · {date_str}
+  </p>
+</div>
+</body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = SENDER_EMAIL
+    msg["To"]      = BCC_EMAIL
+    msg.attach(MIMEText(html, "html"))
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
+            s.sendmail(SENDER_EMAIL, [BCC_EMAIL], msg.as_string())
+        print(f"    🚨 Watchdog alert sent to {BCC_EMAIL}")
+    except Exception as e:
+        print(f"    ❌ Watchdog email failed: {e}")
+
+
+# =============================================================================
 # 🔧 MAIN
 # =============================================================================
 
 def main():
-    print(f"\n\U0001f50d ATS Job Search v4.4.6")
+    print(f"\n\U0001f50d ATS Job Search v4.4.8")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
           f"TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
@@ -1770,6 +1845,8 @@ def main():
         print("\u274c SENDER_EMAIL missing from .env"); return
 
     profiles_to_run = PROFILES[:1] if TEST_PROFILE_ONLY else PROFILES
+    results_summary = {}   # {name: raw_result_count} for watchdog
+    emails_sent     = 0
 
     for profile in profiles_to_run:
         name     = profile["name"]
@@ -1795,6 +1872,7 @@ def main():
         results = search_for_profile(profile)
         today   = datetime.date.today()
         sal_min = profile.get("salary_minimum", 0)
+        results_summary[name] = len(results)
 
         gems = sorted(
             [j for j in results
@@ -1854,8 +1932,18 @@ def main():
             print(f"    \U0001f4e7 Sending email \u2014 {len(gems)} Hidden Gems, {len(just_posted)} Just Posted...")
             html = build_email_html(profile, gems, just_posted)
             send_email(profile["email"], name, html)
+            emails_sent += 1
         print("   Cooling down (20s — letting Sheets API quota recover)...\n")
         time.sleep(20)
+
+    # Watchdog — alert if zero raw results across ALL profiles (likely Serper credits gone)
+    total_results = sum(results_summary.values())
+    if total_results == 0 and not TEST_MODE:
+        print("\n🚨 Zero results across all profiles — sending watchdog alert...")
+        send_watchdog_email(profiles_to_run, results_summary)
+    elif emails_sent == 0 and not TEST_MODE:
+        print(f"\n⚠️  Run complete — {sum(results_summary.values())} results found "
+              f"but none were email-worthy (all seen before or below threshold)")
 
     print("\n\u2728 Done.\n")
     if TEST_MODE:
