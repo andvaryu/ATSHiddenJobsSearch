@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-ATS Job Search Script — v4.4.8
+ATS Job Search Script — v4.4.9
 Searches ATS platforms and direct employer career sites for job postings,
 cross-references against major job boards, scores by relevance, and delivers
 personalized HTML emails + Google Sheets trackers per user.
 
-Current profiles: Andy, Vanessa, Maryjane, Edith, Brian
+Current profiles: Brian, Andy, Vanessa, Maryjane, Edith
 Sources: 17 ATS platforms + 8 direct employer sites (25 total)
 
 Key features:
-- Enriched history file (single source of truth: pinned, rejected, applied, stage)
+- Enriched history file with emailed field — seen_before only True if job was actually emailed
 - Section logic: Pinned / Hidden Gems / Just Posted / Open Market / Circulating / Possible / Applied
 - Age-based section routing (7-day gem window, 2-day just-posted window)
 - Deep page fetch for Strong/Good jobs: JSON-LD → tail scan → compensation proximity search
@@ -18,8 +18,8 @@ Key features:
 - Lenient location filter: drops only explicit wrong-city matches with no remote signal
 - Google Sheets: full rewrite with user data preserved, 429 rate-limit backoff
 - Watchdog email fires when zero results (likely Serper credits exhausted)
-- No email sent if no Hidden Gems or Just Posted that run
-- Sheet not rewritten if zero jobs to write (preserves existing data)
+- No-gems email sent with Lao Tzu quote when no hidden gems found
+- Named test profile — set TEST_PROFILE_NAME to run a specific user in test mode
 """
 
 import csv
@@ -47,8 +47,8 @@ load_dotenv(Path(__file__).parent / ".env")
 # ✏️  RUN MODE
 # =============================================================================
 
-TEST_MODE         = True
-TEST_PROFILE_ONLY = True
+TEST_MODE         = True   # True = emails route to BCC only
+TEST_PROFILE_NAME = "Brian" # Only used when TEST_MODE=True — name must match PROFILES
 
 # Set to True temporarily to see why jobs are being filtered out
 DEBUG_FILTERS     = False
@@ -61,6 +61,8 @@ SENDER_EMAIL        = os.getenv("SENDER_EMAIL", "")
 SENDER_APP_PASSWORD = os.getenv("SENDER_APP_PASSWORD", "")
 BCC_EMAIL           = os.getenv("BCC_EMAIL", "")
 SERPER_API_KEY      = os.getenv("SERPER_API_KEY", "")
+ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
+
 _raw_creds = os.getenv("GOOGLE_CREDENTIALS_FILE", "google_credentials.json")
 if not os.path.isabs(_raw_creds):
     SERVICE_ACCOUNT_FILE = str(Path(__file__).parent / _raw_creds)
@@ -329,9 +331,10 @@ def history_path(name):
     return HISTORY_DIR / f"history_{name.lower()}.csv"
 
 
+# emailed field added — seen_before only True if job was actually emailed to user
 HISTORY_FIELDS = [
     "url", "first_seen", "title", "company", "ats_site",
-    "pinned", "rejected", "applied", "stage", "salary", "location", "match"
+    "pinned", "rejected", "applied", "stage", "salary", "location", "match", "emailed"
 ]
 
 
@@ -351,6 +354,7 @@ def load_history(name):
                 d        = datetime.date.fromisoformat(row.get("first_seen", "")[:10])
                 pinned   = row.get("pinned", "").upper() in ("TRUE", "1", "YES")
                 rejected = row.get("rejected", "").upper() in ("TRUE", "1", "YES")
+                emailed  = row.get("emailed", "").upper() in ("TRUE", "1", "YES")
                 if d >= cutoff or pinned or (rejected and d >= reject_cutoff):
                     hist[url] = {
                         "first_seen_date": d,
@@ -360,6 +364,7 @@ def load_history(name):
                         "ats_site":        row.get("ats_site", ""),
                         "pinned":          pinned,
                         "rejected":        rejected,
+                        "emailed":         emailed,
                         "applied":         row.get("applied", "").upper() in ("TRUE","1","YES"),
                         "stage":           row.get("stage", ""),
                         "salary":          row.get("salary", ""),
@@ -375,12 +380,17 @@ def get_rejected_urls(history):
     return {url for url, h in history.items() if h.get("rejected")}
 
 
-def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
+def save_history(name, jobs, prev_user_data, new_rejected_urls=None, emailed_urls=None):
+    """
+    Save enriched history. emailed_urls is a set of URLs that were actually
+    sent in an email this run — only these get seen_before=True next run.
+    """
     path     = history_path(name)
     existing = load_history(name)
     today    = datetime.date.today()
     cutoff   = today - datetime.timedelta(days=HISTORY_WEEKS * 7)
     reject_cutoff = today - datetime.timedelta(days=REJECT_DAYS)
+    emailed_urls  = emailed_urls or set()
 
     if new_rejected_urls:
         for url in new_rejected_urls:
@@ -391,6 +401,7 @@ def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
                     "first_seen_date": today, "first_seen": today.isoformat(),
                     "title": "", "company": "", "ats_site": "",
                     "pinned": False, "rejected": True, "applied": False,
+                    "emailed": False,
                     "stage": "", "salary": "", "location": "", "match": "",
                 }
 
@@ -404,12 +415,16 @@ def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
         applied  = normalize_bool(user.get("applied_check", "")) or \
                    bool(user.get("date_applied", "").strip())
         stage    = user.get("stage", "")
+        was_emailed = url in emailed_urls
 
         if url in existing:
             entry = existing[url]
             entry["pinned"]   = pinned
             entry["rejected"] = rejected or entry.get("rejected", False)
             entry["applied"]  = applied
+            # Only mark emailed=True when actually emailed — never unset it
+            if was_emailed:
+                entry["emailed"] = True
             if stage:                      entry["stage"]    = stage
             if job.get("salary"):          entry["salary"]   = job["salary"]
             if job.get("location"):        entry["location"] = job["location"]
@@ -427,6 +442,7 @@ def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
                 "pinned":          pinned,
                 "rejected":        rejected,
                 "applied":         applied,
+                "emailed":         was_emailed,
                 "stage":           stage,
                 "salary":          job.get("salary", ""),
                 "location":        job.get("location", ""),
@@ -453,6 +469,7 @@ def save_history(name, jobs, prev_user_data, new_rejected_urls=None):
                     "pinned":     "TRUE" if pinned else "FALSE",
                     "rejected":   "TRUE" if rejected else "FALSE",
                     "applied":    "TRUE" if entry.get("applied") else "FALSE",
+                    "emailed":    "TRUE" if entry.get("emailed") else "FALSE",
                     "stage":      entry.get("stage", ""),
                     "salary":     entry.get("salary", ""),
                     "location":   entry.get("location", ""),
@@ -478,6 +495,7 @@ def save_rejected(name, new_urls):
                 "first_seen_date": today, "first_seen": today.isoformat(),
                 "title": "", "company": "", "ats_site": "",
                 "pinned": False, "rejected": True, "applied": False,
+                "emailed": False,
                 "stage": "", "salary": "", "location": "", "match": "",
             }
     path = history_path(name)
@@ -501,6 +519,7 @@ def save_rejected(name, new_urls):
                     "pinned":   "TRUE" if pinned else "FALSE",
                     "rejected": "TRUE" if rejected else "FALSE",
                     "applied":  "TRUE" if entry.get("applied") else "FALSE",
+                    "emailed":  "TRUE" if entry.get("emailed") else "FALSE",
                     "stage": entry.get("stage",""), "salary": entry.get("salary",""),
                     "location": entry.get("location",""), "match": entry.get("match",""),
                 })
@@ -929,6 +948,8 @@ def search_for_profile(profile):
                 loc    = extract_location(text)
                 hist_entry      = history.get(url, {})
                 first_seen_date = hist_entry.get("first_seen_date", datetime.date.today())
+                # seen_before is True only if job was previously EMAILED, not just found
+                seen_before     = hist_entry.get("emailed", False)
                 results.append({
                     "title":             r.get("title", "No title"),
                     "company":           extract_company(r, site, url),
@@ -940,7 +961,7 @@ def search_for_profile(profile):
                     "remote":            remote,
                     "location":          loc,
                     "date_posted":       "",
-                    "seen_before":       url in history,
+                    "seen_before":       seen_before,
                     "first_seen_date":   first_seen_date,
                     "first_seen":        first_seen_date.isoformat(),
                     "on_linkedin":       False,
@@ -1175,7 +1196,6 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
         current_rows = sheet_props.get("gridProperties", {}).get("rowCount", 1000)
         current_cols = sheet_props.get("gridProperties", {}).get("columnCount", 26)
 
-        # Clear and write — these are the critical calls, must have backoff protection
         clear_ok = False
         delay = 15
         for attempt in range(4):
@@ -1187,14 +1207,14 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
                 break
             except HttpError as e:
                 if e.resp.status == 429 and attempt < 3:
-                    print(f"    ⏳ Rate limit (clear) — waiting {delay}s...")
+                    print(f"    \u23f3 Rate limit (clear) — waiting {delay}s...")
                     time.sleep(delay)
                     delay *= 2
                 else:
                     raise
 
         if not clear_ok:
-            print(f"    ❌ Could not clear sheet after retries — aborting write")
+            print(f"    \u274c Could not clear sheet after retries — aborting write")
             return
 
         write_ok = False
@@ -1210,18 +1230,17 @@ def rewrite_sheet(service, sheet_id, name, all_jobs, prev_user_data):
                 break
             except HttpError as e:
                 if e.resp.status == 429 and attempt < 3:
-                    print(f"    ⏳ Rate limit (write) — waiting {delay}s...")
+                    print(f"    \u23f3 Rate limit (write) — waiting {delay}s...")
                     time.sleep(delay)
                     delay *= 2
                 else:
                     raise
 
         if not write_ok:
-            print(f"    ❌ CRITICAL: Sheet cleared but data write failed after retries. "
-                  f"Sheet may be blank — re-run the script to repopulate.")
+            print(f"    \u274c CRITICAL: Sheet cleared but write failed. Re-run to repopulate.")
             return
 
-        time.sleep(1.5)   # cool-down before next API call
+        time.sleep(1.5)
 
         rows_written = len(all_rows)
         if current_rows > rows_written + 5:
@@ -1412,7 +1431,6 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             }})
 
     def run_chunks(requests, chunk_size=50):
-        """Send batch requests in chunks with exponential backoff on 429 rate limits."""
         for i in range(0, len(requests), chunk_size):
             chunk   = requests[i:i + chunk_size]
             delay   = 15
@@ -1422,7 +1440,7 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
                     service.spreadsheets().batchUpdate(
                         spreadsheetId=sheet_id, body={"requests": chunk}
                     ).execute()
-                    time.sleep(1.2)   # polite pause between chunks
+                    time.sleep(1.2)
                     break
                 except HttpError as e:
                     if e.resp.status == 429:
@@ -1445,7 +1463,6 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
 
 
 def sheets_batch_with_backoff(service, sheet_id, requests_body, label=""):
-    """Execute a batchUpdate with exponential backoff on 429."""
     delay   = 15
     retries = 4
     for attempt in range(retries):
@@ -1593,14 +1610,128 @@ def update_sheet(name, all_jobs, prev_user_data, new_rejected_urls):
 
     print(f"    \U0001f4cb Writing {len(deduped)} jobs to sheet")
     if not deduped:
-        print(f"    ⚠️  No jobs to write — skipping sheet rewrite to preserve existing data")
+        print(f"    \u26a0\ufe0f  No jobs to write — skipping sheet rewrite to preserve existing data")
         return
     rewrite_sheet(service, sheet_id, name, deduped, prev_user_data)
 
 
 # =============================================================================
+# 🔧 LAO TZU QUOTE VIA CLAUDE API
+# =============================================================================
+
+def get_laotzu_quote():
+    """Fetch a random Lao Tzu quote via the Anthropic API."""
+    if not ANTHROPIC_API_KEY:
+        return "The journey of a thousand miles begins with a single step."
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 150,
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Give me one authentic quote from Lao Tzu or the Tao Te Ching. "
+                        "Return ONLY the quote text and attribution, nothing else. "
+                        "Format: \"[quote]\" — Lao Tzu"
+                    )
+                }]
+            },
+            timeout=10
+        )
+        data = resp.json()
+        text = data.get("content", [{}])[0].get("text", "").strip()
+        return text if text else "The journey of a thousand miles begins with a single step. — Lao Tzu"
+    except Exception:
+        return "\"The journey of a thousand miles begins with a single step.\" — Lao Tzu"
+
+
+# =============================================================================
 # 🔧 EMAIL BUILDER
 # =============================================================================
+
+def build_no_gems_email(profile):
+    """Email sent when no Hidden Gems or Just Posted found."""
+    name      = profile["name"]
+    date_str  = datetime.date.today().strftime("%B %d, %Y")
+    sheet_id  = SHEET_IDS.get(name, "")
+    sheet_url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+                 if sheet_id and sheet_id.strip() else "")
+    sheet_name = f"{name}'s Hidden Jobs"
+
+    quote = get_laotzu_quote()
+
+    test_banner = ""
+    if TEST_MODE:
+        test_banner = ('<div style="background:#fef3c7;border:2px solid #f59e0b;'
+                       'border-radius:8px;padding:10px 16px;margin-bottom:14px;'
+                       'font-size:13px;color:#92400e;font-weight:600;">'
+                       '\U0001f9ea TEST MODE \u2014 routed to sender for review.</div>')
+
+    sheet_link = (f'<a href="{sheet_url}" style="color:#1e3a5f;font-weight:600;">'
+                  f'{sheet_name}</a>') if sheet_url else sheet_name
+
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<style>
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+        background:#f3f4f6;margin:0;padding:20px;color:#111827;}}
+  .wrap{{max-width:600px;margin:0 auto;}}
+  .hdr{{background:#1e3a5f;color:#fff;border-radius:10px 10px 0 0;padding:22px 26px;}}
+  .hdr h1{{margin:0 0 3px;font-size:20px;}}
+  .hdr p{{margin:0;font-size:13px;opacity:.75;}}
+  .body{{background:#fff;border:1px solid #e5e7eb;border-top:none;
+         padding:24px 26px;border-radius:0 0 10px 10px;}}
+  .quote{{background:#f8f6f0;border-left:3px solid #92400e;border-radius:4px;
+          padding:16px 20px;margin:20px 0;font-style:italic;
+          color:#44403c;font-size:14px;text-align:center;line-height:1.7;}}
+  .footer{{text-align:center;color:#9ca3af;font-size:11px;padding:16px 0 0;}}
+  a.btn{{display:inline-block;background:#1e3a5f;color:#fff;padding:8px 16px;
+         border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;}}
+</style></head>
+<body><div class="wrap">
+  {test_banner}
+  <div class="hdr">
+    <h1>✨ No Hidden Jobs Today</h1>
+    <p>{date_str}</p>
+  </div>
+  <div class="body">
+    <p style="font-size:15px;color:#111827;margin-top:0;">
+      <strong>Congrats! You're up to speed with all the jobs out there.</strong>
+      No stone unturned for you!
+    </p>
+    <p style="font-size:14px;color:#374151;line-height:1.7;">
+      While you wait for new hidden jobs to crop up, you can:
+    </p>
+    <ul style="font-size:14px;color:#374151;line-height:2.2;">
+      <li><strong>A)</strong> Search
+        <a href="https://linkedin.com/jobs" style="color:#1e3a5f;">LinkedIn</a> or
+        <a href="https://indeed.com" style="color:#1e3a5f;">Indeed</a>
+        for the jobs everyone else can see</li>
+      <li><strong>B)</strong> Visit your {sheet_link} to review past hidden jobs found</li>
+      <li><strong>C)</strong> Enjoy a well-earned day off! \U0001f3d6\ufe0f</li>
+    </ul>
+
+    <div class="quote">
+      {quote}
+    </div>
+
+    <p style="font-size:14px;color:#374151;">See you tomorrow!</p>
+
+    {f'''<div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb;">
+      <p style="font-size:12px;color:#6b7280;margin:0 0 8px;">Your tracked jobs:</p>
+      <a href="{sheet_url}" class="btn">{sheet_name} \u2192</a>
+    </div>''' if sheet_url else ''}
+  </div>
+  <div class="footer">ATS Job Search &middot; {date_str}</div>
+</div></body></html>"""
+
 
 def build_email_html(profile, gems, just_posted):
     name      = profile["name"]
@@ -1608,6 +1739,7 @@ def build_email_html(profile, gems, just_posted):
     sheet_id  = SHEET_IDS.get(name, "")
     sheet_url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
                  if sheet_id and sheet_id.strip() else "")
+    sheet_name = f"{name}'s Hidden Jobs"
 
     def rbadge(val):
         c = {"\U0001f3e0 Remote":    ("#dcfce7","#166534"),
@@ -1656,9 +1788,7 @@ def build_email_html(profile, gems, just_posted):
           </div>
         </div>"""
 
-    gems_html = ("\n".join(card(j) for j in gems) if gems else
-                 "<p style='color:#9ca3af;font-size:13px;font-style:italic;'>"
-                 "No new hidden gems this run \u2014 check your tracker for the full list.</p>")
+    gems_html = "\n".join(card(j) for j in gems) if gems else ""
 
     sheet_btn = ""
     if sheet_url:
@@ -1671,6 +1801,17 @@ def build_email_html(profile, gems, just_posted):
                      f'background:#1e3a5f;color:#fff;padding:8px 16px;border-radius:6px;'
                      f'font-size:13px;font-weight:600;text-decoration:none;">'
                      f'Open Tracker \u2192</a></div>')
+
+    sheet_footer = ""
+    if sheet_url:
+        sheet_footer = (f'<div style="margin-top:20px;padding-top:16px;'
+                        f'border-top:1px solid #e5e7eb;text-align:center;">'
+                        f'<p style="font-size:12px;color:#6b7280;margin:0 0 8px;">'
+                        f'Your tracked jobs:</p>'
+                        f'<a href="{sheet_url}" style="display:inline-block;'
+                        f'background:#1e3a5f;color:#fff;padding:8px 16px;border-radius:6px;'
+                        f'font-size:13px;font-weight:600;text-decoration:none;">'
+                        f'{sheet_name} \u2192</a></div>')
 
     test_banner = ""
     if TEST_MODE:
@@ -1723,6 +1864,7 @@ def build_email_html(profile, gems, just_posted):
   {gems_html}
   {jp_hdr if just_posted else ""}
   {jp_html}
+  {sheet_footer}
   <div class="footer">ATS Job Search &middot; serper.dev &middot; {date_str}</div>
 </div></body></html>"""
 
@@ -1731,10 +1873,13 @@ def build_email_html(profile, gems, just_posted):
 # 🔧 EMAIL SENDER
 # =============================================================================
 
-def send_email(to_email, to_name, html_body):
+def send_email(to_email, to_name, html_body, subject_override=None):
     date_str  = datetime.date.today().strftime("%b %d")
     actual_to = BCC_EMAIL if TEST_MODE else to_email
-    subject   = f"{'[TEST] ' if TEST_MODE else ''}Job Search \u2014 {to_name} \u00b7 {date_str}"
+    if subject_override:
+        subject = f"{'[TEST] ' if TEST_MODE else ''}{subject_override}"
+    else:
+        subject = f"{'[TEST] ' if TEST_MODE else ''}Job Search \u2014 {to_name} \u00b7 {date_str}"
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = SENDER_EMAIL
@@ -1759,77 +1904,48 @@ def send_email(to_email, to_name, html_body):
 # =============================================================================
 
 def send_watchdog_email(profiles_run, results_summary):
-    """Alert email when zero results — likely Serper.dev credits exhausted."""
     date_str = datetime.date.today().strftime("%B %d, %Y")
-    subject  = f"⚠️ Job Search Alert — No Results · {datetime.date.today().strftime('%b %d')}"
-
+    subject  = f"\u26a0\ufe0f Job Search Alert \u2014 No Results \u00b7 {datetime.date.today().strftime('%b %d')}"
     rows = ""
     for name, count in results_summary.items():
-        icon  = "✅" if count > 0 else "❌"
+        icon  = "\u2705" if count > 0 else "\u274c"
         color = "#166534" if count > 0 else "#991b1b"
         bg    = "#dcfce7" if count > 0 else "#fee2e2"
         rows += (f"<tr><td style='padding:8px 12px;font-size:13px;'>{name}</td>"
                  f"<td style='padding:8px 12px;font-size:13px;text-align:center;"
                  f"background:{bg};color:{color};font-weight:600;'>"
                  f"{icon} {count} results</td></tr>")
-
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-             background:#f3f4f6;margin:0;padding:20px;color:#111827;">
+<body style="font-family:-apple-system,sans-serif;background:#f3f4f6;margin:0;padding:20px;color:#111827;">
 <div style="max-width:600px;margin:0 auto;">
   <div style="background:#7f1d1d;color:#fff;border-radius:10px 10px 0 0;padding:22px 26px;">
-    <h1 style="margin:0 0 4px;font-size:20px;">⚠️ Job Search Run — No Results</h1>
+    <h1 style="margin:0 0 4px;font-size:20px;">\u26a0\ufe0f Job Search Run \u2014 No Results</h1>
     <p style="margin:0;font-size:13px;opacity:0.8;">{date_str}</p>
   </div>
-  <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;
-              padding:20px 26px;border-radius:0 0 10px 10px;">
-    <p style="font-size:14px;color:#374151;margin-top:0;">
-      The scheduled job search run completed but produced <strong>zero results</strong>
-      across all profiles. This usually means the
-      <strong>Serper.dev API credits are exhausted</strong>.
-    </p>
-    <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;
-                  border-radius:8px;overflow:hidden;margin:16px 0;">
-      <thead>
-        <tr style="background:#1e3a5f;color:#fff;">
-          <th style="padding:8px 12px;text-align:left;font-size:12px;">Profile</th>
-          <th style="padding:8px 12px;text-align:center;font-size:12px;">Raw Results Found</th>
-        </tr>
-      </thead>
-      <tbody>{rows}</tbody>
+  <div style="background:#fff;border:1px solid #e5e7eb;padding:20px 26px;border-radius:0 0 10px 10px;">
+    <p style="font-size:14px;color:#374151;margin-top:0;">Zero results across all profiles.
+      Likely cause: <strong>Serper.dev credits exhausted</strong>.</p>
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;margin:16px 0;">
+      <thead><tr style="background:#1e3a5f;color:#fff;">
+        <th style="padding:8px 12px;text-align:left;font-size:12px;">Profile</th>
+        <th style="padding:8px 12px;text-align:center;font-size:12px;">Results</th>
+      </tr></thead><tbody>{rows}</tbody>
     </table>
-    <p style="font-size:14px;color:#374151;"><strong>Steps to fix:</strong></p>
-    <ol style="font-size:13px;color:#374151;line-height:2;">
-      <li>Top up Serper.dev credits</li>
-      <li>Check PythonAnywhere task log for errors</li>
-      <li>Re-run the script once credits are restored</li>
-    </ol>
     <a href="https://serper.dev/dashboard"
        style="display:block;background:#1e3a5f;color:#fff;padding:10px 16px;
               border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;
-              text-align:center;margin:8px 0;">
-      🔑 Top Up Serper.dev Credits →
-    </a>
+              text-align:center;margin:8px 0;">\U0001f511 Top Up Serper.dev Credits \u2192</a>
     <a href="https://www.pythonanywhere.com/user/7var6/"
        style="display:block;background:#0369a1;color:#fff;padding:10px 16px;
               border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;
-              text-align:center;margin:8px 0;">
-      🖥️ PythonAnywhere Task Logs →
-    </a>
+              text-align:center;margin:8px 0;">\U0001f5a5\ufe0f PythonAnywhere Task Logs \u2192</a>
     <a href="https://claude.ai/chats"
        style="display:block;background:#5b21b6;color:#fff;padding:10px 16px;
               border-radius:6px;font-size:13px;font-weight:600;text-decoration:none;
-              text-align:center;margin:8px 0;">
-      💬 Open Claude to Update Script →
-    </a>
+              text-align:center;margin:8px 0;">\U0001f4ac Open Claude to Update Script \u2192</a>
   </div>
-  <p style="text-align:center;color:#9ca3af;font-size:11px;padding:12px 0 0;">
-    ATS Job Search · Watchdog Alert · {date_str}
-  </p>
-</div>
-</body></html>"""
-
+</div></body></html>"""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = SENDER_EMAIL
@@ -1839,9 +1955,9 @@ def send_watchdog_email(profiles_run, results_summary):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
             s.sendmail(SENDER_EMAIL, [BCC_EMAIL], msg.as_string())
-        print(f"    🚨 Watchdog alert sent to {BCC_EMAIL}")
+        print(f"    \U0001f6a8 Watchdog alert sent to {BCC_EMAIL}")
     except Exception as e:
-        print(f"    ❌ Watchdog email failed: {e}")
+        print(f"    \u274c Watchdog email failed: {e}")
 
 
 # =============================================================================
@@ -1849,10 +1965,10 @@ def send_watchdog_email(profiles_run, results_summary):
 # =============================================================================
 
 def main():
-    print(f"\n\U0001f50d ATS Job Search v4.4.8")
+    print(f"\n\U0001f50d ATS Job Search v4.4.9")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
-          f"TEST={TEST_MODE} | SINGLE={TEST_PROFILE_ONLY}\n")
+          f"TEST={TEST_MODE} | PROFILE={TEST_PROFILE_NAME if TEST_MODE else 'ALL'}\n")
 
     if not SERPER_API_KEY:
         print("\u274c SERPER_API_KEY missing from .env"); return
@@ -1861,8 +1977,14 @@ def main():
     if not SENDER_EMAIL:
         print("\u274c SENDER_EMAIL missing from .env"); return
 
-    profiles_to_run = PROFILES[:1] if TEST_PROFILE_ONLY else PROFILES
-    results_summary = {}   # {name: raw_result_count} for watchdog
+    if TEST_MODE:
+        profiles_to_run = [p for p in PROFILES if p["name"] == TEST_PROFILE_NAME]
+        if not profiles_to_run:
+            print(f"\u274c TEST_PROFILE_NAME '{TEST_PROFILE_NAME}' not found in PROFILES"); return
+    else:
+        profiles_to_run = PROFILES
+
+    results_summary = {}
     emails_sent     = 0
 
     for profile in profiles_to_run:
@@ -1910,15 +2032,14 @@ def main():
             key=lambda x: x["relevance_score"], reverse=True
         )
 
-        # Email-priority deep fetch — ensure Hidden Gems + Just Posted have max data
-        # These are the highest-value jobs; fetch any still missing salary or location
-        email_jobs = gems + just_posted
+        # Email-priority deep fetch
+        email_jobs  = gems + just_posted
         needs_fetch = [j for j in email_jobs
                        if not j.get("salary") or j.get("salary") == "n/a"
                        or not j.get("location") or j.get("location") == "unknown"
                        or not j.get("date_posted")]
         if needs_fetch:
-            print(f"    🔎 Email-priority fetch for {len(needs_fetch)} gems/just-posted missing data...")
+            print(f"    \U0001f50e Email-priority fetch for {len(needs_fetch)} jobs missing data...")
             for job in needs_fetch:
                 pg_sal, pg_loc, pg_rem, pg_date = fetch_job_page(job["url"])
                 cur_sal = job.get("salary", "") if job.get("salary") not in ("", "n/a") else ""
@@ -1928,43 +2049,49 @@ def main():
                 if pg_rem  and job.get("remote") in ("In-person", "\U0001f3e2 In-person", ""):
                                              job["remote"]      = pg_rem
                 if pg_date and not job.get("date_posted"): job["date_posted"] = pg_date
-                # Re-check salary minimum after fetch
                 sal_val = extract_salary_value(job.get("salary", ""))
                 if sal_val is not None and sal_val < sal_min:
                     print(f"      \u2193 Gem demoted post-fetch (salary {job['salary']} < ${sal_min:,})")
                     job["relevance_label"] = "\U0001f535 Possible"
                     job["relevance_score"] = min(job.get("relevance_score", 0), 9.9)
                 time.sleep(0.4)
-            # Rebuild lists — remove any demoted jobs
             gems        = [j for j in gems        if j["relevance_label"] != "\U0001f535 Possible"]
             just_posted = [j for j in just_posted if j["relevance_label"] != "\U0001f535 Possible"]
+
+        # Build set of URLs being emailed — used to mark emailed=TRUE in history
+        emailed_urls = {j["url"] for j in gems + just_posted}
 
         if SHEETS_ENABLED:
             print(f"    \U0001f4ca Updating sheet for {name}...")
             update_sheet(name, results, prev_user_data, new_rejected_urls)
 
+        # Save history with emailed URLs marked
+        save_history(name, results, prev_user_data, new_rejected_urls, emailed_urls)
+
         if not gems and not just_posted:
-            print(f"    ⏭️  No Hidden Gems or Just Posted — skipping email for {name}")
+            print(f"    \U0001f4e7 No gems — sending 'up to date' email for {name}...")
+            html = build_no_gems_email(profile)
+            send_email(profile["email"], name, html,
+                       subject_override=f"No Hidden Jobs in your search today \u2014 {name}")
+            emails_sent += 1
         else:
             print(f"    \U0001f4e7 Sending email \u2014 {len(gems)} Hidden Gems, {len(just_posted)} Just Posted...")
             html = build_email_html(profile, gems, just_posted)
             send_email(profile["email"], name, html)
             emails_sent += 1
-        print("   Cooling down (20s — letting Sheets API quota recover)...\n")
+
+        print("   Cooling down (20s)...\n")
         time.sleep(20)
 
-    # Watchdog — alert if zero raw results across ALL profiles (likely Serper credits gone)
     total_results = sum(results_summary.values())
     if total_results == 0 and not TEST_MODE:
-        print("\n🚨 Zero results across all profiles — sending watchdog alert...")
+        print("\n\U0001f6a8 Zero results across all profiles — sending watchdog alert...")
         send_watchdog_email(profiles_to_run, results_summary)
-    elif emails_sent == 0 and not TEST_MODE:
-        print(f"\n⚠️  Run complete — {sum(results_summary.values())} results found "
-              f"but none were email-worthy (all seen before or below threshold)")
 
     print("\n\u2728 Done.\n")
     if TEST_MODE:
-        print("   \u26a0\ufe0f  Set TEST_MODE=False and TEST_PROFILE_ONLY=False for live send.\n")
+        print(f"   \u26a0\ufe0f  TEST_MODE is ON (profile: {TEST_PROFILE_NAME}). "
+              f"Set TEST_MODE=False for live send.\n")
 
 
 if __name__ == "__main__":
