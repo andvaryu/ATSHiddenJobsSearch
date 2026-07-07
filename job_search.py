@@ -5,7 +5,7 @@ Searches ATS platforms and direct employer career sites for job postings,
 cross-references against major job boards, scores by relevance, and delivers
 personalized HTML emails + Google Sheets trackers per user.
 
-Current profiles: Andy, Vanessa, Maryjane, Edith
+Current profiles: Andy, Vanessa, Maryjane, Edith, Brian
 Sources: 17 ATS platforms + 8 direct employer sites (25 total)
 
 Key features:
@@ -47,8 +47,8 @@ load_dotenv(Path(__file__).parent / ".env")
 # ✏️  RUN MODE
 # =============================================================================
 
-TEST_MODE         = False
-TEST_PROFILE_ONLY = False
+TEST_MODE         = True
+TEST_PROFILE_ONLY = True
 
 # Set to True temporarily to see why jobs are being filtered out
 DEBUG_FILTERS     = False
@@ -72,6 +72,7 @@ SHEET_IDS = {
     "Vanessa":  os.getenv("SHEET_ID_VANESSA", ""),
     "Maryjane": os.getenv("SHEET_ID_MARYJANE", ""),
     "Edith":    os.getenv("SHEET_ID_EDITH", ""),
+    "Brian":    os.getenv("SHEET_ID_BRIAN", ""),
 }
 
 # =============================================================================
@@ -107,6 +108,22 @@ EXCLUDE_SNIPPET_KEYWORDS = [
 # =============================================================================
 
 PROFILES = [
+    {
+        "name": "Brian",
+        "email": "sharp99@gmail.com",
+        "salary_minimum": 175000,
+        "priority_titles": ["cloud architect"],
+        "location_preference": "remote",
+        "ok_cities": ["seattle", "redmond", "bellevue", "renton", "bothell", "kirkland"],
+        "keyword_combos": [
+            ["cloud", "architect"],
+        ],
+        "industry_filter": [
+            "tech", "engineering", "nonprofit",
+            "software", "AI", "cloud infrastructure",
+            "any", "startup", "software", "SaaS", "other",
+        ],
+    },
     {
         "name": "Andy",
         "email": "andrew@varyu.net",
