@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ATS Job Search Script — v4.4.9
+ATS Job Search Script — v4.5.1
 Searches ATS platforms and direct employer career sites for job postings,
 cross-references against major job boards, scores by relevance, and delivers
 personalized HTML emails + Google Sheets trackers per user.
