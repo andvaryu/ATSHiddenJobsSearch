@@ -792,31 +792,44 @@ def fetch_job_page(url):
             except (json.JSONDecodeError, Exception):
                 continue
 
-        head_html  = html[:5000]
-        tail_html  = html[-6000:]
+        # Extract meta description BEFORE stripping tags — catches Ashby, Workday salary in meta
+        meta_match = re.search(
+            r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']{20,})["\']|'
+            r'<meta[^>]+content=["\']([^"\']{20,})["\'][^>]+name=["\']description["\']',
+            html, re.IGNORECASE
+        )
+        meta_desc = ""
+        if meta_match:
+            meta_desc = (meta_match.group(1) or meta_match.group(2) or "").replace("&#39;", "'")
 
         def clean_html(raw):
             c = re.sub(r'<[^>]+>', ' ', raw)
             return re.sub(r'\s+', ' ', c)
 
-        head_clean = clean_html(head_html)
-        tail_clean = clean_html(tail_html)
-        full_clean = head_clean + " " + tail_clean
+        full_clean = clean_html(html)
 
-        if not location: location = extract_location(head_clean) or extract_location(tail_clean)
+        if not location: location = extract_location(full_clean)
         if not remote:   remote   = extract_remote(full_clean)
 
         if not salary:
-            prox_match = re.search(
-                r'(?:compensation|salary range|base pay|pay range|total comp|pay:)(.{0,400})',
-                tail_clean, re.IGNORECASE | re.DOTALL
-            )
-            if prox_match:
-                salary = extract_salary(prox_match.group(1))
+            # Try meta description first — most reliable on JS-heavy pages
+            if meta_desc:
+                salary = extract_salary(meta_desc)
+            # Proximity search on full page with expanded trigger phrases
             if not salary:
-                salary = extract_salary(tail_clean)
+                prox_match = re.search(
+                    r'(?:compensation|salary range|base salary|base pay|pay range|'
+                    r'total comp|pay:|starting salary|target compensation|'
+                    r'salary for this position|annual salary|pay for this role|'
+                    r'likely salary|salary description|salary band|pay band|'
+                    r'expected salary|total compensation)(.{0,400})',
+                    full_clean, re.IGNORECASE | re.DOTALL
+                )
+                if prox_match:
+                    salary = extract_salary(prox_match.group(1))
+            # General scan fallback
             if not salary:
-                salary = extract_salary(head_clean)
+                salary = extract_salary(full_clean)
 
         return salary, location, remote, date_posted
 
@@ -1017,7 +1030,7 @@ def search_for_profile(profile):
         job["unsyndicated"] = not any(synd.values())
 
         pg_sal, pg_loc, pg_rem, pg_date = fetch_job_page(job["url"])
-        cur_sal = job["salary"] if job["salary"] not in ("", "n/a") else ""
+        cur_sal = job["salary"] if job["salary"] not in ("", "n/a", "Check JD") else ""
         cur_loc = job["location"] if job["location"] not in ("", "unknown") else ""
         if pg_sal  and not cur_sal:                                    job["salary"]      = pg_sal
         if pg_loc  and not cur_loc:                                    job["location"]    = pg_loc
@@ -1116,7 +1129,7 @@ def job_to_row(job, section_num, prev_user_data, today):
     row[COL["ats_site"]]    = job.get("ats_site", "")
     row[COL["first_seen"]]  = job.get("first_seen", today)
 
-    salary   = job.get("salary", "") or prev.get("salary", "") or "n/a"
+    salary   = job.get("salary", "") or prev.get("salary", "") or "Check JD"
     location = job.get("location", "") or prev.get("location", "") or "unknown"
     remote   = job.get("remote", "") or prev.get("remote", "") or "In-person"
 
@@ -1409,13 +1422,22 @@ def apply_sheet_formatting(service, sheet_id, all_rows, row_meta):
             "cell": {"userEnteredFormat": {"textFormat": black_normal}},
             "fields": "userEnteredFormat.textFormat"
         }})
+    # URL column — blue font so URLs are visible
+    blue_url = {"foregroundColor": {"red": 0.07, "green": 0.36, "blue": 0.78},
+                "fontSize": 10, "bold": False, "italic": False}
+    batch.append({"repeatCell": {
+        "range": {"sheetId": gid, "startRowIndex": 1,
+                  "startColumnIndex": COL["url"], "endColumnIndex": COL["url"] + 1},
+        "cell": {"userEnteredFormat": {"textFormat": blue_url}},
+        "fields": "userEnteredFormat.textFormat"
+    }})
     for i, meta in enumerate(row_meta):
         sr = i + 1
         if meta["is_header"] or meta.get("is_spacer"): continue
         row = all_rows[sr] if sr < len(all_rows) else []
         sal = row[COL["salary"]]   if len(row) > COL["salary"]   else ""
         loc = row[COL["location"]] if len(row) > COL["location"] else ""
-        if str(sal) in ("n/a", ""):
+        if str(sal) in ("n/a", "Check JD", ""):
             batch.append({"repeatCell": {
                 "range": {"sheetId": gid, "startRowIndex": sr, "endRowIndex": sr + 1,
                           "startColumnIndex": COL["salary"], "endColumnIndex": COL["salary"] + 1},
@@ -1757,7 +1779,7 @@ def build_email_html(profile, gems, just_posted):
                 f'border-radius:10px;font-size:11px;font-weight:700;">{label}</span>')
 
     def card(job):
-        sal      = job.get("salary") or "n/a"
+        sal      = job.get("salary") or "Check JD"
         loc      = job.get("location") or "unknown"
         date_p   = job.get("date_posted", "")
         date_html = (f'<span style="font-size:11px;color:#9ca3af;margin-left:8px;">'
@@ -1820,13 +1842,7 @@ def build_email_html(profile, gems, just_posted):
                        'font-size:13px;color:#92400e;font-weight:600;">'
                        '\U0001f9ea TEST MODE \u2014 routed to sender for review.</div>')
 
-    label, defn = SECTION_LABELS[1]
-    sec_hdr = (f'<div style="background:#166534;color:#fff;border-radius:8px;'
-               f'padding:12px 16px;margin:16px 0 10px;">'
-               f'<div style="font-size:15px;font-weight:700;">{label} \u2014 {len(gems)} new</div>'
-               f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">{defn}</div>'
-               f'</div>')
-
+    # sec_hdr removed — gem count now lives in main header
     jp_label, jp_defn = SECTION_LABELS[6]
     jp_color = f"#{SECTION_COLORS[6]['bg']}"
     jp_hdr = (f'<div style="background:{jp_color};color:#fff;border-radius:8px;'
@@ -1837,6 +1853,8 @@ def build_email_html(profile, gems, just_posted):
 
     jp_html = "\n".join(card(j) for j in just_posted) if just_posted else ""
 
+    gems_defn = SECTION_LABELS[1][1]
+
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <style>
@@ -1844,23 +1862,18 @@ def build_email_html(profile, gems, just_posted):
         background:#f3f4f6;margin:0;padding:20px;color:#111827;}}
   .wrap{{max-width:700px;margin:0 auto;}}
   .hdr{{background:#1e3a5f;color:#fff;border-radius:10px 10px 0 0;padding:22px 26px;}}
-  .hdr h1{{margin:0 0 3px;font-size:21px;}}
-  .hdr p{{margin:0;font-size:13px;opacity:.75;}}
-  .warning{{background:#fef9c3;border:1px solid #fde68a;border-radius:8px;
-            padding:10px 14px;margin:12px 0;font-size:13px;color:#92400e;}}
+  .hdr h1{{margin:0 0 6px;font-size:21px;}}
+  .hdr .count{{font-size:36px;font-weight:800;margin:4px 0;}}
+  .hdr .sub{{font-size:12px;opacity:0.7;margin:0;}}
   .footer{{text-align:center;color:#9ca3af;font-size:11px;padding:16px 0 0;}}
 </style></head>
 <body><div class="wrap">
   {test_banner}
   <div class="hdr">
     <h1>\U0001f48e Hidden Gems \u2014 {name}</h1>
-    <p>{date_str} &nbsp;&middot;&nbsp; {DAYS_BACK}-day search window &nbsp;&middot;&nbsp;
-       {len(ALL_SOURCES)} sources</p>
+    <div class="count">{len(gems)} new</div>
+    <p class="sub">{gems_defn} &nbsp;&middot;&nbsp; {date_str} &nbsp;&middot;&nbsp; {len(ALL_SOURCES)} sources</p>
   </div>
-  <div class="warning">\u26a0\ufe0f <strong>Verify each posting is still open before applying.</strong>
-    Full results including all matches are in your tracker.</div>
-  {sheet_btn}
-  {sec_hdr}
   {gems_html}
   {jp_hdr if just_posted else ""}
   {jp_html}
@@ -1965,7 +1978,7 @@ def send_watchdog_email(profiles_run, results_summary):
 # =============================================================================
 
 def main():
-    print(f"\n\U0001f50d ATS Job Search v4.5.0")
+    print(f"\n\U0001f50d ATS Job Search v4.5.1")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
           f"TEST={TEST_MODE} | PROFILE={TEST_PROFILE_NAME if TEST_MODE else 'ALL'}\n")
@@ -2035,14 +2048,14 @@ def main():
         # Email-priority deep fetch
         email_jobs  = gems + just_posted
         needs_fetch = [j for j in email_jobs
-                       if not j.get("salary") or j.get("salary") == "n/a"
+                       if not j.get("salary") or j.get("salary") in ("n/a", "Check JD")
                        or not j.get("location") or j.get("location") == "unknown"
                        or not j.get("date_posted")]
         if needs_fetch:
             print(f"    \U0001f50e Email-priority fetch for {len(needs_fetch)} jobs missing data...")
             for job in needs_fetch:
                 pg_sal, pg_loc, pg_rem, pg_date = fetch_job_page(job["url"])
-                cur_sal = job.get("salary", "") if job.get("salary") not in ("", "n/a") else ""
+                cur_sal = job.get("salary", "") if job.get("salary") not in ("", "n/a", "Check JD") else ""
                 cur_loc = job.get("location", "") if job.get("location") not in ("", "unknown") else ""
                 if pg_sal  and not cur_sal:  job["salary"]      = pg_sal
                 if pg_loc  and not cur_loc:  job["location"]    = pg_loc
