@@ -47,7 +47,7 @@ load_dotenv(Path(__file__).parent / ".env")
 # ✏️  RUN MODE
 # =============================================================================
 
-TEST_MODE         = True   # True = emails route to BCC only
+TEST_MODE         = False   # True = emails route to BCC only
 TEST_PROFILE_NAME = "Brian" # Only used when TEST_MODE=True — name must match PROFILES
 
 # Set to True temporarily to see why jobs are being filtered out
@@ -1965,7 +1965,7 @@ def send_watchdog_email(profiles_run, results_summary):
 # =============================================================================
 
 def main():
-    print(f"\n\U0001f50d ATS Job Search v4.4.9")
+    print(f"\n\U0001f50d ATS Job Search v4.5.0")
     print(f"   {datetime.date.today()} | {DAYS_BACK}d window | "
           f"{len(ALL_SOURCES)} sources ({len(ATS_SITES)} ATS + {len(EMPLOYER_SITES)} employers) | "
           f"TEST={TEST_MODE} | PROFILE={TEST_PROFILE_NAME if TEST_MODE else 'ALL'}\n")
@@ -2058,8 +2058,12 @@ def main():
             gems        = [j for j in gems        if j["relevance_label"] != "\U0001f535 Possible"]
             just_posted = [j for j in just_posted if j["relevance_label"] != "\U0001f535 Possible"]
 
-        # Build set of URLs being emailed — used to mark emailed=TRUE in history
-        emailed_urls = {j["url"] for j in gems + just_posted}
+        # Only mark URLs as emailed=TRUE when email goes to the real recipient.
+        # In TEST_MODE the email routes to BCC (admin), not the user — so don't
+        # count it as delivered to them.
+        emailed_urls = set()
+        if not TEST_MODE:
+            emailed_urls = {j["url"] for j in gems + just_posted}
 
         if SHEETS_ENABLED:
             print(f"    \U0001f4ca Updating sheet for {name}...")
